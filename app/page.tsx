@@ -1,47 +1,104 @@
+"use client"
+
+import type React from "react"
+
+import { useState } from "react"
+import { Button } from "@/components/ui/button"
+
+type GateStatus = "no_contact" | "gate_closed" | "gate_open"
+
+interface GateResult {
+  status?: GateStatus
+  message?: string
+  error?: string
+}
+
+const STATUS_STYLES: Record<GateStatus, string> = {
+  no_contact: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+  gate_closed: "border-red-500/40 bg-red-500/10 text-red-300",
+  gate_open: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+}
+
 export default function Page() {
+  const [email, setEmail] = useState("")
+  const [phone, setPhone] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<GateResult | null>(null)
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true)
+    setResult(null)
+
+    try {
+      const res = await fetch("/api/check-contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, phone }),
+      })
+      const data = (await res.json()) as GateResult
+      setResult(data)
+    } catch {
+      setResult({ error: "Request failed. Please try again." })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
-    <main
-      style={{
-        colorScheme: 'light dark',
-        position: 'relative',
-        display: 'flex',
-        minHeight: '100vh',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'light-dark(#fff, #000)',
-        color: 'light-dark(#000, #fff)',
-      }}
-    >
-      <svg
-        aria-hidden="true"
-        style={{ width: 80, height: 80 }}
-        width={80}
-        height={80}
-        fill="none"
-        viewBox="0 0 20 20"
-        xmlns="http://www.w3.org/2000/svg"
-        stroke="currentColor"
-        strokeWidth="0.5"
-      >
-        <path
-          d="M14.2 14.2H17V6.9375C17 4.76288 15.2371 3 13.0625 3H5.8V5.8M14.2 14.2V7.79063L7.79062 14.2H14.2ZM14.2 14.2V17H6.9375C4.76288 17 3 15.2371 3 13.0625V5.8H5.8M5.8 5.8V12.2313L12.2313 5.8H5.8Z"
-          strokeLinejoin="round"
-        />
-      </svg>
-      <p
-        style={{
-          position: 'absolute',
-          left: '50%',
-          top: 'calc(50% + 56px)',
-          transform: 'translateX(-50%)',
-          whiteSpace: 'nowrap',
-          fontSize: '14px',
-          fontWeight: 500,
-          color: 'light-dark(#71717a, #a1a1aa)',
-        }}
-      >
-        Your v0 generation will show here.
-      </p>
+    <main className="mx-auto flex min-h-svh max-w-md flex-col justify-center gap-8 px-6 py-16">
+      <header className="flex flex-col gap-2">
+        <h1 className="text-2xl font-semibold text-balance">Business Analyzer Gate Check</h1>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          Check a GoHighLevel contact by email or phone to see if they can access the analyzer.
+        </p>
+      </header>
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          <label htmlFor="email" className="text-sm font-medium">
+            Email
+          </label>
+          <input
+            id="email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="contact@example.com"
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <label htmlFor="phone" className="text-sm font-medium">
+            Phone
+          </label>
+          <input
+            id="phone"
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+15551234567"
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+
+        <Button type="submit" disabled={loading || (!email && !phone)}>
+          {loading ? "Checking..." : "Check contact"}
+        </Button>
+      </form>
+
+      {result?.message && result.status && (
+        <div className={`rounded-md border px-4 py-3 text-sm leading-relaxed ${STATUS_STYLES[result.status]}`}>
+          {result.message}
+        </div>
+      )}
+
+      {result?.error && (
+        <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm leading-relaxed text-red-300">
+          {result.error}
+        </div>
+      )}
     </main>
   )
 }

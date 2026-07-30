@@ -1,0 +1,113 @@
+import { type NextRequest, NextResponse } from "next/server"
+
+const GHL_BASE_URL = "https://services.leadconnectorhq.com"
+const GHL_API_VERSION = "2021-07-28"
+const USED_TAG = "business-analyzer-used"
+
+type GateStatus = "no_contact" | "gate_closed" | "gate_open"
+
+interface GateResult {
+  status: GateStatus
+  message: string
+}
+
+const MESSAGES: Record<GateStatus, string> = {
+  no_contact: "No existing contact found. Safe to proceed.",
+  gate_closed: "Gate closed: Contact has already used the business analyzer.",
+  gate_open: "Gate open: Contact exists but has not used the analyzer yet.",
+}
+
+interface GHLContact {
+  id: string
+  tags?: string[]
+}
+
+interface GHLSearchResponse {
+  contacts?: GHLContact[]
+}
+
+// Basic normalizers so the same input always hits GHL the same way.
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase()
+}
+
+function normalizePhone(phone: string): string {
+  return phone.replace(/[^\d+]/g, "")
+}
+
+async function searchContact(query: string, token: string, locationId: string): Promise<GHLContact | null> {
+  const res = await fetch(`${GHL_BASE_URL}/contacts/search`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Version: GHL_API_VERSION,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      locationId,
+      page: 1,
+      pageLimit: 1,
+      query,
+    }),
+    // Never cache identity lookups.
+    cache: "no-store",
+  })
+
+  if (!res.ok) {
+    const detail = await res.text()
+    throw new Error(`GHL search failed (${res.status}): ${detail}`)
+  }
+
+  const data = (await res.json()) as GHLSearchResponse
+  return data.contacts?.[0] ?? null
+}
+
+export async function POST(request: NextRequest) {
+  const token = process.env.GHL_API_TOKEN
+  const locationId = process.env.GHL_LOCATION_ID
+
+  if (!token || !locationId) {
+    return NextResponse.json(
+      { error: "Server is missing GHL_API_TOKEN or GHL_LOCATION_ID configuration." },
+      { status: 500 },
+    )
+  }
+
+  let body: { email?: string; phone?: string }
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 })
+  }
+
+  const email = body.email ? normalizeEmail(body.email) : ""
+  const phone = body.phone ? normalizePhone(body.phone) : ""
+
+  if (!email && !phone) {
+    return NextResponse.json({ error: "Provide an email or phone to check." }, { status: 400 })
+  }
+
+  try {
+    // Search by whichever identifier was provided (email takes priority).
+    const query = email || phone
+    const contact = await searchContact(query, token, locationId)
+
+    let result: GateResult
+
+    if (!contact) {
+      result = { status: "no_contact", message: MESSAGES.no_contact }
+    } else {
+      const tags = (contact.tags ?? []).map((t) => t.toLowerCase())
+      const hasUsedTag = tags.includes(USED_TAG)
+      result = hasUsedTag
+        ? { status: "gate_closed", message: MESSAGES.gate_closed }
+        : { status: "gate_open", message: MESSAGES.gate_open }
+    }
+
+    return NextResponse.json(result, { status: 200 })
+  } catch (error) {
+    console.log("[v0] GHL contact check error:", error instanceof Error ? error.message : error)
+    return NextResponse.json({ error: "Failed to check contact against GoHighLevel." }, { status: 502 })
+  }
+}
