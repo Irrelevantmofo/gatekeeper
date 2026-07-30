@@ -70,7 +70,13 @@ function normalizePhone(phone: string): string {
   return phone.replace(/[^\d+]/g, "")
 }
 
-async function searchContact(query: string, token: string, locationId: string): Promise<GHLContact | null> {
+type SearchFilter = Record<string, unknown>
+
+async function searchByFilter(
+  filters: SearchFilter[],
+  token: string,
+  locationId: string,
+): Promise<GHLContact | null> {
   const res = await fetch(`${GHL_BASE_URL}/contacts/search`, {
     method: "POST",
     headers: {
@@ -83,7 +89,8 @@ async function searchContact(query: string, token: string, locationId: string): 
       locationId,
       page: 1,
       pageLimit: 1,
-      query,
+      // Exact-match filters are reliable regardless of CRM size, unlike free-text `query`.
+      filters,
     }),
     // Never cache identity lookups.
     cache: "no-store",
@@ -96,6 +103,33 @@ async function searchContact(query: string, token: string, locationId: string): 
 
   const data = (await res.json()) as GHLSearchResponse
   return data.contacts?.[0] ?? null
+}
+
+async function searchContact(
+  email: string,
+  phone: string,
+  token: string,
+  locationId: string,
+): Promise<GHLContact | null> {
+  // Try exact email first (covers standard + additional emails), then fall back to phone.
+  if (email) {
+    const byEmail = await searchByFilter([{ field: "email", operator: "eq", value: email }], token, locationId)
+    if (byEmail) return byEmail
+
+    const byAdditionalEmail = await searchByFilter(
+      [{ field: "additionalEmails", operator: "nested", value: [{ field: "email", operator: "eq", value: email }] }],
+      token,
+      locationId,
+    )
+    if (byAdditionalEmail) return byAdditionalEmail
+  }
+
+  if (phone) {
+    const byPhone = await searchByFilter([{ field: "phone", operator: "eq", value: phone }], token, locationId)
+    if (byPhone) return byPhone
+  }
+
+  return null
 }
 
 export async function POST(request: NextRequest) {
@@ -126,9 +160,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Search by whichever identifier was provided (email takes priority).
-    const query = email || phone
-    const contact = await searchContact(query, token, locationId)
+    // Exact-match on email (with additionalEmails fallback), then phone.
+    const contact = await searchContact(email, phone, token, locationId)
 
     let result: GateResult
 
