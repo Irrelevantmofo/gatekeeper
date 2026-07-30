@@ -26,6 +26,41 @@ interface GHLSearchResponse {
   contacts?: GHLContact[]
 }
 
+// Build CORS headers, echoing back the request origin when it's in the allowlist.
+// Set ALLOWED_ORIGINS (comma-separated) to restrict; defaults to "*".
+function corsHeaders(request: NextRequest): Record<string, string> {
+  const allowed = (process.env.ALLOWED_ORIGINS ?? "*")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean)
+
+  const requestOrigin = request.headers.get("origin")
+  let allowOrigin = "*"
+
+  if (!allowed.includes("*")) {
+    allowOrigin = requestOrigin && allowed.includes(requestOrigin) ? requestOrigin : allowed[0] ?? ""
+  }
+
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Max-Age": "86400",
+  }
+
+  if (allowOrigin) {
+    headers["Access-Control-Allow-Origin"] = allowOrigin
+    // Vary on Origin so caches don't serve the wrong CORS header to another origin.
+    if (allowOrigin !== "*") headers.Vary = "Origin"
+  }
+
+  return headers
+}
+
+// Preflight handler — browsers send OPTIONS before a cross-origin POST.
+export async function OPTIONS(request: NextRequest) {
+  return new NextResponse(null, { status: 204, headers: corsHeaders(request) })
+}
+
 // Basic normalizers so the same input always hits GHL the same way.
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase()
@@ -64,13 +99,15 @@ async function searchContact(query: string, token: string, locationId: string): 
 }
 
 export async function POST(request: NextRequest) {
+  const cors = corsHeaders(request)
+
   const token = process.env.GHL_API_TOKEN
   const locationId = process.env.GHL_LOCATION_ID
 
   if (!token || !locationId) {
     return NextResponse.json(
       { error: "Server is missing GHL_API_TOKEN or GHL_LOCATION_ID configuration." },
-      { status: 500 },
+      { status: 500, headers: cors },
     )
   }
 
@@ -78,14 +115,14 @@ export async function POST(request: NextRequest) {
   try {
     body = await request.json()
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 })
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400, headers: cors })
   }
 
   const email = body.email ? normalizeEmail(body.email) : ""
   const phone = body.phone ? normalizePhone(body.phone) : ""
 
   if (!email && !phone) {
-    return NextResponse.json({ error: "Provide an email or phone to check." }, { status: 400 })
+    return NextResponse.json({ error: "Provide an email or phone to check." }, { status: 400, headers: cors })
   }
 
   try {
@@ -105,9 +142,9 @@ export async function POST(request: NextRequest) {
         : { status: "gate_open", message: MESSAGES.gate_open }
     }
 
-    return NextResponse.json(result, { status: 200 })
+    return NextResponse.json(result, { status: 200, headers: cors })
   } catch (error) {
     console.log("[v0] GHL contact check error:", error instanceof Error ? error.message : error)
-    return NextResponse.json({ error: "Failed to check contact against GoHighLevel." }, { status: 502 })
+    return NextResponse.json({ error: "Failed to check contact against GoHighLevel." }, { status: 502, headers: cors })
   }
 }
