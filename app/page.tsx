@@ -7,9 +7,10 @@ import { useState } from "react"
 type GateStatus = "no_contact" | "gate_closed" | "gate_open"
 
 interface GateResult {
-  status?: GateStatus
+  status?: GateStatus | "marked" | "not_found"
   message?: string
   error?: string
+  contactId?: string
 }
 
 const STATUS_STYLES: Record<GateStatus, { label: string; className: string }> = {
@@ -31,19 +32,18 @@ export default function Page() {
   const [email, setEmail] = useState("")
   const [phone, setPhone] = useState("")
   const [loading, setLoading] = useState(false)
+  const [marking, setMarking] = useState(false)
   const [result, setResult] = useState<GateResult | null>(null)
   const [statusCode, setStatusCode] = useState<number | null>(null)
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
+  async function callEndpoint(path: string) {
     if (!email && !phone) return
 
-    setLoading(true)
     setResult(null)
     setStatusCode(null)
 
     try {
-      const res = await fetch("/api/check-contact", {
+      const res = await fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email || undefined, phone: phone || undefined }),
@@ -53,12 +53,26 @@ export default function Page() {
       setResult(data)
     } catch (err) {
       setResult({ error: err instanceof Error ? err.message : "Request failed." })
-    } finally {
-      setLoading(false)
     }
   }
 
-  const statusStyle = result?.status ? STATUS_STYLES[result.status] : null
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!email && !phone) return
+    setLoading(true)
+    await callEndpoint("/api/check-contact")
+    setLoading(false)
+  }
+
+  async function handleMarkUsed() {
+    if (!email && !phone) return
+    setMarking(true)
+    await callEndpoint("/api/mark-used")
+    setMarking(false)
+  }
+
+  const statusStyle =
+    result?.status && result.status in STATUS_STYLES ? STATUS_STYLES[result.status as GateStatus] : null
 
   return (
     <main className="mx-auto flex min-h-svh w-full max-w-lg flex-col justify-center gap-6 px-6 py-16">
@@ -98,13 +112,24 @@ export default function Page() {
           />
         </div>
 
-        <button
-          type="submit"
-          disabled={loading || (!email && !phone)}
-          className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {loading ? "Checking..." : "Check Contact"}
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button
+            type="submit"
+            disabled={loading || marking || (!email && !phone)}
+            className="inline-flex flex-1 items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading ? "Checking..." : "Check Contact"}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleMarkUsed}
+            disabled={loading || marking || (!email && !phone)}
+            className="inline-flex flex-1 items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {marking ? "Marking..." : "Mark as Used"}
+          </button>
+        </div>
       </form>
 
       {result && (
