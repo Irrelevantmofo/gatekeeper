@@ -1,8 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-
-const GHL_BASE_URL = "https://services.leadconnectorhq.com"
-const GHL_API_VERSION = "2021-07-28"
-const USED_TAG = "business-analyzer-used"
+import { corsHeaders, getGHLConfig, normalizeEmail, normalizePhone, searchContact, USED_TAG } from "@/lib/ghl"
 
 type GateStatus = "no_contact" | "gate_closed" | "gate_open"
 
@@ -17,94 +14,16 @@ const MESSAGES: Record<GateStatus, string> = {
   gate_open: "Gate open: Contact exists but has not used the analyzer yet.",
 }
 
-interface GHLContact {
-  id: string
-  tags?: string[]
-}
-
-interface GHLSearchResponse {
-  contacts?: GHLContact[]
-}
-
-// Build CORS headers, echoing back the request origin when it's in the allowlist.
-// Set ALLOWED_ORIGINS (comma-separated) to restrict; defaults to "*".
-function corsHeaders(request: NextRequest): Record<string, string> {
-  const allowed = (process.env.ALLOWED_ORIGINS ?? "*")
-    .split(",")
-    .map((o) => o.trim())
-    .filter(Boolean)
-
-  const requestOrigin = request.headers.get("origin")
-  let allowOrigin = "*"
-
-  if (!allowed.includes("*")) {
-    allowOrigin = requestOrigin && allowed.includes(requestOrigin) ? requestOrigin : allowed[0] ?? ""
-  }
-
-  const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Max-Age": "86400",
-  }
-
-  if (allowOrigin) {
-    headers["Access-Control-Allow-Origin"] = allowOrigin
-    // Vary on Origin so caches don't serve the wrong CORS header to another origin.
-    if (allowOrigin !== "*") headers.Vary = "Origin"
-  }
-
-  return headers
-}
-
 // Preflight handler — browsers send OPTIONS before a cross-origin POST.
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: corsHeaders(request) })
 }
 
-// Basic normalizers so the same input always hits GHL the same way.
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase()
-}
-
-function normalizePhone(phone: string): string {
-  return phone.replace(/[^\d+]/g, "")
-}
-
-async function searchContact(query: string, token: string, locationId: string): Promise<GHLContact | null> {
-  const res = await fetch(`${GHL_BASE_URL}/contacts/search`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Version: GHL_API_VERSION,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      locationId,
-      page: 1,
-      pageLimit: 1,
-      query,
-    }),
-    // Never cache identity lookups.
-    cache: "no-store",
-  })
-
-  if (!res.ok) {
-    const detail = await res.text()
-    throw new Error(`GHL search failed (${res.status}): ${detail}`)
-  }
-
-  const data = (await res.json()) as GHLSearchResponse
-  return data.contacts?.[0] ?? null
-}
-
 export async function POST(request: NextRequest) {
   const cors = corsHeaders(request)
 
-  const token = process.env.GHL_API_TOKEN
-  const locationId = process.env.GHL_LOCATION_ID
-
-  if (!token || !locationId) {
+  const config = getGHLConfig()
+  if (!config) {
     return NextResponse.json(
       { error: "Server is missing GHL_API_TOKEN or GHL_LOCATION_ID configuration." },
       { status: 500, headers: cors },
@@ -126,9 +45,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Search by whichever identifier was provided (email takes priority).
-    const query = email || phone
-    const contact = await searchContact(query, token, locationId)
+    // Read-only lookup. Exact-match on email (with additionalEmails fallback), then phone.
+    const contact = await searchContact(email, phone, config.token, config.locationId)
 
     let result: GateResult
 
