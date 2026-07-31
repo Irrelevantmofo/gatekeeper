@@ -9,6 +9,38 @@ export interface GHLContact {
   tags?: string[]
 }
 
+// A custom field on the upsert body must be keyed by the GHL field id; the value
+// goes in `field_value` (per the Contacts v2 spec).
+export interface ResolvedCustomField {
+  id: string
+  field_value: unknown
+}
+
+export interface UpsertContactInput {
+  firstName?: string
+  lastName?: string
+  companyName?: string
+  email?: string
+  phone?: string
+  customFields?: ResolvedCustomField[]
+}
+
+interface GHLLocationCustomField {
+  id: string
+  name?: string
+  fieldKey?: string
+  dataType?: string
+}
+
+interface GHLUpsertResponse {
+  // Upsert returns the affected contact plus a `new` flag (created vs. updated).
+  new?: boolean
+  contact?: GHLContact
+  // Some responses put the record at the top level; read defensively.
+  id?: string
+  tags?: string[]
+}
+
 interface GHLSearchResponse {
   contacts?: GHLContact[]
 }
@@ -120,6 +152,125 @@ export async function searchContact(
   }
 
   return null
+}
+
+// Creates or updates a contact by email/phone and returns the record (with its id).
+// Upsert is idempotent — it honors the location's "Allow Duplicate Contact" setting,
+// so it dedupes instead of creating a second contact. Returning the id synchronously
+// is what lets the caller tag in the same request without racing GHL's indexing.
+export async function upsertContact(
+  input: UpsertContactInput,
+  token: string,
+  locationId: string,
+): Promise<GHLContact> {
+  const res = await fetch(`${GHL_BASE_URL}/contacts/upsert`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Version: GHL_API_VERSION,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      locationId,
+      firstName: input.firstName || undefined,
+      lastName: input.lastName || undefined,
+      companyName: input.companyName || undefined,
+      email: input.email || undefined,
+      phone: input.phone || undefined,
+      source: "Business Loan Analyzer",
+      customFields: input.customFields && input.customFields.length > 0 ? input.customFields : undefined,
+    }),
+    cache: "no-store",
+  })
+
+  if (!res.ok) {
+    const detail = await res.text()
+    throw new Error(`GHL upsert failed (${res.status}): ${detail}`)
+  }
+
+  const data = (await res.json()) as GHLUpsertResponse
+  const contact = data.contact ?? (data.id ? { id: data.id, tags: data.tags } : null)
+  if (!contact?.id) {
+    throw new Error("GHL upsert returned no contact id")
+  }
+  return contact
+}
+
+// Slugify a label/key into GHL's underscore style so "Gross Monthly Revenue",
+// "gross_monthly_revenue" and "gross-monthly-revenue" all collapse to one lookup key.
+function slugifyFieldKey(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+}
+
+// The location's contact custom-field list rarely changes, so cache it in module
+// scope with a short TTL to avoid an extra GHL round-trip on every warm invocation.
+let fieldCache: { at: number; fields: GHLLocationCustomField[] } | null = null
+const FIELD_CACHE_TTL_MS = 5 * 60 * 1000
+
+async function getLocationContactFields(token: string, locationId: string): Promise<GHLLocationCustomField[]> {
+  const now = Date.now()
+  if (fieldCache && now - fieldCache.at < FIELD_CACHE_TTL_MS) return fieldCache.fields
+
+  const res = await fetch(`${GHL_BASE_URL}/locations/${locationId}/customFields?model=contact`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Version: GHL_API_VERSION,
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  })
+
+  if (!res.ok) {
+    const detail = await res.text()
+    throw new Error(`GHL get custom fields failed (${res.status}): ${detail}`)
+  }
+
+  const data = (await res.json()) as { customFields?: GHLLocationCustomField[] }
+  const fields = data.customFields ?? []
+  fieldCache = { at: now, fields }
+  return fields
+}
+
+// Maps caller-supplied { key: value } analyzer fields onto real GHL custom-field ids.
+// Matching is tolerant: it resolves by fieldKey (with or without the "contact." prefix)
+// and by slugified field name. Anything that doesn't resolve is returned in `unresolved`
+// so the caller can log it — a missing field never blocks the contact write.
+export async function resolveContactCustomFields(
+  incoming: Record<string, unknown>,
+  token: string,
+  locationId: string,
+): Promise<{ resolved: ResolvedCustomField[]; unresolved: string[] }> {
+  const entries = Object.entries(incoming).filter(
+    ([, v]) => v !== undefined && v !== null && v !== "",
+  )
+  if (entries.length === 0) return { resolved: [], unresolved: [] }
+
+  const fields = await getLocationContactFields(token, locationId)
+
+  const lookup = new Map<string, string>() // normalized key -> field id
+  for (const f of fields) {
+    if (!f.id) continue
+    if (f.fieldKey) {
+      const suffix = f.fieldKey.includes(".") ? f.fieldKey.split(".").slice(1).join(".") : f.fieldKey
+      lookup.set(slugifyFieldKey(suffix), f.id)
+    }
+    if (f.name) lookup.set(slugifyFieldKey(f.name), f.id)
+  }
+
+  const resolved: ResolvedCustomField[] = []
+  const unresolved: string[] = []
+  for (const [key, value] of entries) {
+    const id = lookup.get(slugifyFieldKey(key))
+    if (id) resolved.push({ id, field_value: value })
+    else unresolved.push(key)
+  }
+  return { resolved, unresolved }
 }
 
 // Adds the "used" tag to a contact. GHL merges tags, so this is safe to call
