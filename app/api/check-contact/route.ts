@@ -105,6 +105,27 @@ async function searchByFilter(
   return data.contacts?.[0] ?? null
 }
 
+// Adds the "used" tag to a contact. GHL merges tags, so this is safe to call
+// even if the tag somehow already exists.
+async function addUsedTag(contactId: string, token: string): Promise<void> {
+  const res = await fetch(`${GHL_BASE_URL}/contacts/${contactId}/tags`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Version: GHL_API_VERSION,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({ tags: [USED_TAG] }),
+    cache: "no-store",
+  })
+
+  if (!res.ok) {
+    const detail = await res.text()
+    throw new Error(`GHL add tag failed (${res.status}): ${detail}`)
+  }
+}
+
 async function searchContact(
   email: string,
   phone: string,
@@ -170,9 +191,15 @@ export async function POST(request: NextRequest) {
     } else {
       const tags = (contact.tags ?? []).map((t) => t.toLowerCase())
       const hasUsedTag = tags.includes(USED_TAG)
-      result = hasUsedTag
-        ? { status: "gate_closed", message: MESSAGES.gate_closed }
-        : { status: "gate_open", message: MESSAGES.gate_open }
+
+      if (hasUsedTag) {
+        result = { status: "gate_closed", message: MESSAGES.gate_closed }
+      } else {
+        // Gate is open: this call means the contact is now using the analyzer,
+        // so mark them as used before returning.
+        await addUsedTag(contact.id, token)
+        result = { status: "gate_open", message: MESSAGES.gate_open }
+      }
     }
 
     return NextResponse.json(result, { status: 200, headers: cors })
