@@ -17,7 +17,7 @@
 | **0** — Accounts & agreements | OpenAI account/billing, ZDR/DPA, Supabase project, legal review of consent copy | ⏳ In progress (Supabase project live) |
 | **1** — Consent + gate + storage path | Supabase schema/bucket, `lib/supabase.ts`, `/api/consent`, `/api/upload-url` | 🟡 Foundation + routes built (typecheck clean); live test pending env vars |
 | **2** — Extraction | `/api/analyze` → OpenAI vision + Structured Outputs → persist → delete PDF → tag | ✅ **Validated** end-to-end (real OpenRouter/Luna); account_status fix confirmed |
-| **3** — Simulator | deterministic `simulate()` engine + `/api/simulate`, suggested-scenario curation | 🟡 Built (tsc clean); deploy + validate pending |
+| **3** — Simulator | deterministic `simulate()` engine + `/api/simulate` + `/api/best-path`, suggested-scenario curation | ✅ **Validated live** (1 tiny deltaRange display fix pending redeploy) |
 | **4** — Retention & rights | `/api/cleanup` cron, user-initiated delete, IP/global rate limiting, log scrubbing | ⬜ Not started |
 | **5** — Hardening/scale | async analysis (queue + poll/Realtime), cost dashboards, SSN/account masking | ⬜ Not started |
 
@@ -223,6 +223,15 @@ Re-fix deployed. Drove a full real run via curl (consent → upload-url → PUT 
 - `/api/delete` (contract §10) still Phase 4.
 
 **Next:** deploy + validate Phase 3; then Phase 4 (cleanup cron, user delete, rate limiting) or wire the AI phrasing pass for scenarios.
+
+### 2026-08-07 — Phase 3 validated live ✅ (+ deltaRange fix)
+
+Deployed; drove all three endpoints via curl against prod (report `77836265`, real OpenRouter):
+- **/api/analyze** — `suggestedScenarios` populated (4, capped 5, `engine+template`); "pay all under 10%" ranked #1, then per-card.
+- **/api/simulate** — pay CBNA+CITI to 10% → TU 646→**721** / EX→717 / EQ→713; waterfall non-additive (CITI +49, CBNA +26 in-combination).
+- **/api/best-path** — target 850 → `reachable:false`, projected **752**, honest note; target 700 → `reachable:true`, **stops early after 2 cards** ($7,106). Greedy points-per-dollar ordering works.
+
+**Bug fixed** (`impactOf` in credit-simulator.ts): `deltaRange` was floored at 0 (`[0,110]`), making rationale read "roughly 0–110 points". Now `[min,max]` across bureaus (`[104,110]`). tsc clean. **Redeploy to pick up.**
 
 ---
 

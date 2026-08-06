@@ -245,7 +245,8 @@ function impactOf(res: SimResult) {
   const perBureau = res.perBureau.map((r) => ({ bureau: r.bureau, before: r.baseScore, after: r.estimatedScore, delta: r.estimatedScore - r.baseScore }))
   const deltas = perBureau.map((p) => p.delta)
   const avg = deltas.length ? deltas.reduce((x, y) => x + y, 0) / deltas.length : 0
-  return { perBureau, deltaRange: [Math.min(...deltas, 0), Math.max(...deltas, 0)] as [number, number], avg }
+  const deltaRange: [number, number] = deltas.length ? [Math.min(...deltas), Math.max(...deltas)] : [0, 0]
+  return { perBureau, deltaRange, avg }
 }
 
 export function buildSuggestedScenarios(input: SimInput, maxN = 5): SuggestedScenario[] {
