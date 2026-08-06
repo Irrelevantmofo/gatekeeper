@@ -1,8 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders } from "@/lib/ghl"
 import { CREDIT_REPORTS_BUCKET, getSupabaseAdmin } from "@/lib/supabase"
-import { REPORT_STATUS, useMockExtraction } from "@/lib/credit"
+import { getMaxPages, isPrecheckEnabled, REPORT_STATUS, useMockExtraction } from "@/lib/credit"
 import { buildMockExtraction, type RawExtraction } from "@/lib/credit-extraction"
+import { precheckCreditReport } from "@/lib/credit-precheck"
 import { extractReportFacts } from "@/lib/llm-extract"
 import { buildAnalysis } from "@/lib/credit-simulator"
 
@@ -72,6 +73,21 @@ export async function POST(request: NextRequest) {
     if ((dlErr || !blob) && !mock) {
       throw new Error(`Failed to download PDF: ${dlErr?.message ?? "not found"}`)
     }
+    const bytes = blob ? await blob.arrayBuffer() : null
+
+    // WRONG-DOCUMENT PRE-CHECK (zero AI cost) — reject non-credit-report PDFs
+    // BEFORE spending extraction tokens (plan §7 cost control).
+    if (bytes && isPrecheckEnabled()) {
+      const pre = await precheckCreditReport(bytes, getMaxPages())
+      if (!pre.ok) {
+        await supabase.storage.from(CREDIT_REPORTS_BUCKET).remove([report.storage_path])
+        await supabase
+          .from("reports")
+          .update({ status: REPORT_STATUS.failed, error: pre.reason?.slice(0, 500), pdf_deleted_at: new Date().toISOString(), storage_path: null })
+          .eq("id", reportId)
+        return NextResponse.json({ status: "failed", reason: "not_a_credit_report", error: pre.reason }, { status: 422, headers: cors })
+      }
+    }
 
     // Extract facts.
     let extracted: RawExtraction
@@ -81,7 +97,7 @@ export async function POST(request: NextRequest) {
       extracted = buildMockExtraction()
       model = "mock"
     } else {
-      const pdfBase64 = Buffer.from(await blob!.arrayBuffer()).toString("base64")
+      const pdfBase64 = Buffer.from(bytes!).toString("base64")
       const result = await extractReportFacts({ pdfBase64, filename: `${reportId}.pdf` })
       extracted = result.extracted
       tokenUsage = result.tokenUsage

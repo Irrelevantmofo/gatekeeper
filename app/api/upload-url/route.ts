@@ -13,7 +13,7 @@ import { getSweepTtlMinutes, REPORT_STATUS } from "@/lib/credit"
 
 // Kept in sync with the frontend contract (§4). Backend is the source of truth.
 const MAX_BYTES = 10 * 1024 * 1024 // 10 MB
-const MAX_PAGES = 15
+const MAX_PAGES = 60 // tri-bureau reports run 20–40 pages; enforced in /api/analyze precheck
 // Supabase signed upload URL token validity (default ~2h; not configurable).
 const UPLOAD_URL_TTL_MS = 2 * 60 * 60 * 1000
 

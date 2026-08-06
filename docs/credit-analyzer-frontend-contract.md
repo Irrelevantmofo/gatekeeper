@@ -125,7 +125,7 @@ If there's **no** GHL contact to inherit email/phone from, the "no form" goal ca
   "reportId":  "r_71c4...",     // use this for every later call (analyze/status/simulate/delete)
   "uploadUrl": "https://<supabase>/storage/v1/object/upload/sign/...token...",
   "expiresAt": "2026-08-06T21:15:00Z",   // signed URL is short-lived — upload promptly
-  "constraints": { "maxBytes": 10485760, "maxPages": 15, "mimeType": "application/pdf" }  // 🔜 values may tune
+  "constraints": { "maxBytes": 10485760, "maxPages": 60, "mimeType": "application/pdf" }
 }
 ```
 > **Frontend:** hold onto `reportId`. Enforce `constraints` **before** uploading (reject >10 MB / non-PDF client-side for a nicer error) — but the backend enforces them too.
@@ -429,6 +429,7 @@ For a "delete my data" button (supports the privacy promise in the consent copy)
 | **400** | Bad/missing fields, no email+phone, non-PDF | `{ "error": "..." }` | Fix input, re-submit |
 | **404** | Unknown `reportId` | `{ "error": "..." }` | Restart the flow |
 | **413** | File too big / too many pages | `{ "error": "..." }` | Ask for a smaller PDF |
+| **422** | Uploaded PDF isn't a credit report (zero-AI pre-check) | `{ "status":"failed", "reason":"not_a_credit_report", "error":"This doesn't look like a credit report…" }` | Show `error`; let them upload the correct file. **No AI was spent.** |
 | **429** | Rate limited (per-IP or global cap) | `{ "error": "...", "retryAfter": 3600 }` | Show "try again later" |
 | **500 / 502** | Server/AI failure | `{ "error": "..." }` | Show retry; offer re-upload |
 

@@ -233,6 +233,19 @@ Deployed; drove all three endpoints via curl against prod (report `77836265`, re
 
 **Bug fixed** (`impactOf` in credit-simulator.ts): `deltaRange` was floored at 0 (`[0,110]`), making rationale read "roughly 0–110 points". Now `[min,max]` across bureaus (`[104,110]`). tsc clean. **Redeploy to pick up.**
 
+### 2026-08-07 — Wrong-document pre-check (prevent AI token spend)
+
+**Ask:** stop non-credit-report PDFs from burning extraction tokens (previously caught only *after* the call by `isValid` → repair retry, which doubled the spend on junk).
+
+**Changed:**
+- **Dep:** `unpdf@1.8.0` (serverless PDF.js text extraction).
+- **`lib/credit-precheck.ts`** (new) — zero-AI sniff: extract text layer, require ≥3 distinct credit-report signals (bureau names, "credit score", "revolving", "credit limit", …) and ≤ `CREDIT_MAX_PAGES`. **Fail-open** on unparseable/image-only PDFs (don't block real users on a parser hiccup); **fail-closed** only when real text clearly isn't a credit report.
+- **`app/api/analyze`** — reads bytes once, runs precheck BEFORE the OpenRouter call; on fail → delete PDF + status `failed` + **HTTP 422** `{reason:"not_a_credit_report"}`, no tokens spent.
+- **`lib/credit.ts`** — `isPrecheckEnabled()` (off via `CREDIT_PRECHECK=off`), `getMaxPages()` (default 60).
+- **`next.config.mjs`** — `serverExternalPackages: ["unpdf"]`. **`upload-url`** maxPages 15→60 (real reports exceed 15). `.env.example`, frontend contract §11 (422 row) updated.
+
+**Verified:** `tsc` clean; overrides intact in lockfile. ⏳ Deploy + validate (upload a non-credit PDF → expect 422, no OpenRouter cost; real report still passes).
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.

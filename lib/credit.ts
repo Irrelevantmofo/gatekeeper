@@ -71,6 +71,19 @@ export function useMockExtraction(): boolean {
   return process.env.CREDIT_ANALYZE_MOCK === "true" || !getProviderApiKey()
 }
 
+// Wrong-document pre-check is on unless CREDIT_PRECHECK=off (escape hatch if it
+// ever false-rejects a legit report). See lib/credit-precheck.ts.
+export function isPrecheckEnabled(): boolean {
+  return process.env.CREDIT_PRECHECK !== "off"
+}
+
+// Max PDF pages accepted for analysis — a cost/abuse ceiling. Default 60 (real
+// tri-bureau reports run 20–40 pages).
+export function getMaxPages(): number {
+  const n = process.env.CREDIT_MAX_PAGES ? Number.parseInt(process.env.CREDIT_MAX_PAGES, 10) : Number.NaN
+  return Number.isFinite(n) && n > 0 ? n : 60
+}
+
 // Applies the credit-analyzer used-tag to a GHL contact (plan §4.1, step 7).
 // Reuses lib/ghl.ts constants read-only (BAT untouched). GHL merges tags, so
 // this is idempotent.
