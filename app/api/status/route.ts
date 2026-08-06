@@ -1,7 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders } from "@/lib/ghl"
 import { getSupabaseAdmin } from "@/lib/supabase"
-import { toAnalysis, type RawExtraction } from "@/lib/credit-extraction"
+import { type RawExtraction } from "@/lib/credit-extraction"
+import { buildAnalysis } from "@/lib/credit-simulator"
 
 // GET /api/status?reportId=... — poll analysis progress (plan §4 step 4, §5).
 // Returns { status } while processing, { status:"failed", error } on failure, and
@@ -50,8 +51,9 @@ export async function GET(request: NextRequest) {
     if (aErr || !analysis) {
       return NextResponse.json({ status: "processing" }, { status: 200, headers: cors })
     }
+    const maxN = Number.parseInt(process.env.RECOMMENDATIONS_MAX_N || "5", 10) || 5
     return NextResponse.json(
-      { status: "analyzed", analysis: toAnalysis(reportId, analysis.extracted as RawExtraction) },
+      { status: "analyzed", analysis: buildAnalysis(reportId, analysis.extracted as RawExtraction, maxN) },
       { status: 200, headers: cors },
     )
   }

@@ -239,19 +239,21 @@ function isActionable(acct: ExtractedAccount): boolean {
 export function toAnalysis(reportId: string, raw: RawExtraction) {
   const bureaus = raw.scores.map((s) => s.bureau)
 
-  const perBureauSum = (pick: (b: PerBureauAccount) => number | null, filter: (a: ExtractedAccount) => boolean) =>
-    bureaus.map((bureau) => {
-      let total = 0
-      for (const a of raw.accounts) {
-        if (!filter(a)) continue
-        const b = a.per_bureau.find((x) => x.bureau === bureau)
-        if (b && isOpen(b.account_status)) total += pick(b) ?? 0
-      }
-      return { bureau, value: total }
-    })
-
-  const revolvingBalances = perBureauSum((b) => b.balance, (a) => a.type === "revolving")
-  const revolvingLimits = perBureauSum((b) => b.credit_limit, (a) => a.type === "revolving")
+  // Aggregate revolving utilization per bureau, EXCLUDING $0-limit lines (the
+  // report's "amount in H/C column is credit limit" quirk that otherwise pushes
+  // utilization above 100% — plan §17.3).
+  const revolvingUtil = bureaus.map((bureau) => {
+    let bal = 0
+    let lim = 0
+    for (const a of raw.accounts) {
+      if (a.type !== "revolving") continue
+      const b = a.per_bureau.find((x) => x.bureau === bureau)
+      if (!b || !isOpen(b.account_status) || !b.credit_limit || b.credit_limit <= 0) continue
+      bal += Math.max(0, b.balance ?? 0)
+      lim += b.credit_limit
+    }
+    return { bureau, value: lim > 0 ? bal / lim : null }
+  })
 
   const accounts = raw.accounts.map((a, i) => ({
     accountId: `acct_${i}_${slug(a.creditor)}`,
@@ -287,11 +289,7 @@ export function toAnalysis(reportId: string, raw: RawExtraction) {
         bureau,
         value: raw.accounts.filter((a) => a.per_bureau.some((b) => b.bureau === bureau && isOpen(b.account_status))).length,
       })),
-      revolvingUtilization: bureaus.map((bureau, idx) => {
-        const lim = revolvingLimits[idx]?.value ?? 0
-        const bal = revolvingBalances[idx]?.value ?? 0
-        return { bureau, value: lim > 0 ? bal / lim : null }
-      }),
+      revolvingUtilization: revolvingUtil,
       hardInquiries24mo: bureaus.map((bureau) => ({ bureau, value: raw.inquiries.filter((q) => q.bureau === bureau).length })),
       publicRecords: bureaus.map((bureau) => ({ bureau, value: raw.public_records.length })),
     },

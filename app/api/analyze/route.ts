@@ -2,8 +2,9 @@ import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders } from "@/lib/ghl"
 import { CREDIT_REPORTS_BUCKET, getSupabaseAdmin } from "@/lib/supabase"
 import { REPORT_STATUS, useMockExtraction } from "@/lib/credit"
-import { buildMockExtraction, toAnalysis, type RawExtraction } from "@/lib/credit-extraction"
+import { buildMockExtraction, type RawExtraction } from "@/lib/credit-extraction"
 import { extractReportFacts } from "@/lib/llm-extract"
+import { buildAnalysis } from "@/lib/credit-simulator"
 
 // POST /api/analyze — extract structured facts from the uploaded PDF, persist
 // them, delete the PDF, and return the analysis (plan §4 steps 4–7).
@@ -113,8 +114,9 @@ export async function POST(request: NextRequest) {
     // observe-only for testing — tagging would pollute the test contact. It runs
     // in production once CREDIT_GATE_ENFORCED=true. See lib/credit.applyCreditUsedTag.
 
+    const maxN = Number.parseInt(process.env.RECOMMENDATIONS_MAX_N || "5", 10) || 5
     return NextResponse.json(
-      { status: "analyzed", mock, analysis: toAnalysis(reportId, extracted) },
+      { status: "analyzed", mock, analysis: buildAnalysis(reportId, extracted, maxN) },
       { status: 200, headers: cors },
     )
   } catch (err) {

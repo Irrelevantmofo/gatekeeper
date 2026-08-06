@@ -302,29 +302,35 @@ This is the heart of the contract. **Every score-bearing field is an array of th
 
 `POST /api/simulate`
 
-This is the interactive engine. Send **one or more** actions (the user can combine items — "pay Citi to 10% **and** pay Capital One $500"). It's **deterministic and fast** — call it on every slider change if you like.
+This is the interactive engine — **deterministic and fast** (no AI, no cost), so call it on every slider change. It handles both UI control groups at once: per-card **paydowns** and the abstract **factor sliders**.
 
 **Request**
 ```jsonc
 {
   "reportId": "r_71c4...",
-  "actions": [
-    { "type": "paydown_revolving", "accountId": "acct_citi_5424",   "targetUtilizationPct": 0.10 },
-    { "type": "paydown_revolving", "accountId": "acct_capone_5108", "payDownAmount": 500 }
-  ]
+  "scenario": {
+    // "Pay Down Your Balances" cards — pay by dollar amount OR to a target utilization.
+    "payDown": [
+      { "accountId": "acct_1_citi", "targetUtilizationPct": 0.10 },
+      { "accountId": "acct_2_capital-one", "amount": 500 }
+    ],
+    // "Your Score, Your Control" sliders (all optional). utilizationPct takes only `to`;
+    // the rest take { from, to } — send the value the UI currently shows as `from`.
+    "factorChanges": {
+      "utilizationPct":   { "to": 0.10 },
+      "paymentOnTimePct": { "from": 0.90, "to": 0.98 },
+      "lengthYears":      { "from": 7, "to": 10 },
+      "creditMixTypes":   { "from": 2, "to": 3 },
+      "recentInquiries":  { "from": 3, "to": 1 }
+    }
+  }
 }
 ```
-
-**Action types** (all reference an `accountId`/`collectionId` from §8):
-
-| `type` | Required fields | Meaning |
-|---|---|---|
-| `paydown_revolving` | `accountId` + **either** `targetUtilizationPct` (0–1) **or** `payDownAmount` | Lower a card's balance |
-| `payoff_all_revolving` | *(none)* | Pay every open revolving card to $0 |
-| `settle_collection` | `collectionId` | Resolve/settle a collection |
-| `remove_hard_inquiry` | `inquiryId` | Model removing a recent inquiry *(rarely suggested — see note)* |
-
-> Only send `paydown_revolving` for accounts where `actionable: true`. The backend will reject actions on non-actionable accounts.
+Notes:
+- Every field is optional — send only what the user changed. An empty `scenario` (`{}`) just echoes the base scores (use it for "Reset").
+- `payDown` and `factorChanges.utilizationPct` are two ways to drive utilization; if both are sent, `utilizationPct` wins.
+- Only put `payDown` entries for accounts where `actionable: true` (§8).
+- **A suggested scenario is directly runnable** — pass its `actions` array straight in as `scenario.payDown`: `{ "reportId": "...", "scenario": { "payDown": suggestion.actions } }`.
 
 **Response**
 ```jsonc
@@ -351,7 +357,20 @@ This is the interactive engine. Send **one or more** actions (the user can combi
 ### 9.1 Simulate rendering notes
 - **Deltas are NOT additive** — that's why we return a `waterfall` (each step's marginal contribution *in combination*) and a **recomputed** `estimatedScore`, not a sum. Show the waterfall as a step chart; label `inCombination: true` items as "in combination" so users don't add them up themselves.
 - Show all three bureaus' `estimatedScore` + `estimatedRange`. Lead with the **range**, not a single hero number.
-- Empty `actions` → the response just echoes `baseScore` as `estimatedScore` (no-op). Fine to call for a reset.
+- Empty `scenario` (`{}`) → echoes `baseScore` as `estimatedScore` (no-op). Use for "Reset".
+
+### 9.2 ⚠️ "How Your Score Is Calculated" panel — use VantageScore weights
+Your current panel shows **FICO** weights (35/30/15/10/10), but the score is **VantageScore 3.0** and the engine uses VantageScore-3.0-informed influence. For consistency between the panel and the math, update the panel to:
+
+| Factor | Weight |
+|---|---|
+| Payment History | **40%** |
+| Credit Utilization (amounts owed) | **34%** |
+| Length of Credit History | **13%** |
+| Credit Mix | **8%** |
+| New Credit Inquiries | **5%** |
+
+(Backend source of truth: `VANTAGESCORE_3_WEIGHTS` in `lib/credit-simulator.ts`.)
 
 ---
 

@@ -16,8 +16,8 @@
 |-------|-------|--------|
 | **0** — Accounts & agreements | OpenAI account/billing, ZDR/DPA, Supabase project, legal review of consent copy | ⏳ In progress (Supabase project live) |
 | **1** — Consent + gate + storage path | Supabase schema/bucket, `lib/supabase.ts`, `/api/consent`, `/api/upload-url` | 🟡 Foundation + routes built (typecheck clean); live test pending env vars |
-| **2** — Extraction | `/api/analyze` → OpenAI vision + Structured Outputs → persist → delete PDF → tag | ✅ Working (real OpenRouter/Luna). `status` split into account_status/payment_status — applied; redeploy + re-validate pending |
-| **3** — Simulator | deterministic `simulate()` engine + `/api/simulate`, suggested-scenario curation | ⬜ Not started |
+| **2** — Extraction | `/api/analyze` → OpenAI vision + Structured Outputs → persist → delete PDF → tag | ✅ **Validated** end-to-end (real OpenRouter/Luna); account_status fix confirmed |
+| **3** — Simulator | deterministic `simulate()` engine + `/api/simulate`, suggested-scenario curation | 🟡 Built (tsc clean); deploy + validate pending |
 | **4** — Retention & rights | `/api/cleanup` cron, user-initiated delete, IP/global rate limiting, log scrubbing | ⬜ Not started |
 | **5** — Hardening/scale | async analysis (queue + poll/Realtime), cost dashboards, SSN/account masking | ⬜ Not started |
 
@@ -186,6 +186,42 @@ Deployed the first `status`-fix and ran `/api/analyze` on the orphan (`bc8d42c1`
 - `isValid()` hardened to require `scores.length > 0`, so an empty extraction triggers the repair retry and then fails loudly instead of persisting as a silent blank "analyzed".
 
 **Pending:** redeploy, then **one fresh upload** to validate (orphan was consumed, so can't reuse it). Expect: 3 scores + full accounts, `account_status` reading open/closed (not "Current"), `report_type` 3B.
+
+### 2026-08-07 — Phase 2 VALIDATED ✅ (account_status fix confirmed)
+
+Re-fix deployed. Drove a full real run via curl (consent → upload-url → PUT local example PDF → analyze) against the live deployment (report `ae61a0d5`):
+- `mock:false`, `reportType:3B`, scoreModel VantageScore 3.0, scores **TU 646 / EX 643 / EQ 639** (exact), **37 accounts**.
+- **account_status now distinguishes** open 25 / closed 14 / paid 53 / transferred 3 (previously all "Current"). payment_status captured separately.
+- **actionable = 3**: CBNA (71%), CITI (94%), CAPITAL ONE (99%) — the open, individual, revolving cards. AU CAP ONE correctly excluded.
+- summary.openAccounts 8/9/8; PDF deleted by the pipeline (per prior verified runs; MCP was disconnected so not re-queried this run).
+
+**Phase 2 done.** Remaining item (GHL used-tag) is intentionally deferred to production (gate enforcement).
+
+**Minor follow-up for Phase 3:** Equifax revolving utilization came out >100% (1.11) because some Equifax entries report `credit_limit = 0` (the report's "amount in H/C column is credit limit" quirk). The simulator/util math should fall back to high-credit or exclude $0-limit revolving lines so utilization can't exceed 100%.
+
+### 2026-08-07 — Phase 3: deterministic simulator + `/api/simulate` + suggested scenarios
+
+**Goal:** turn the extracted facts into score projections and curated paydown suggestions — deterministic, instant, no LLM cost (plan §8, §14, §15).
+
+**Research (web):** VantageScore 3.0 influence — payment history ~40%, age & type ~21%, utilization ~20%, balances ~11%, recent credit ~5%, available credit ~3%. Exact point deltas are proprietary → model is a **labeled estimate**, anchored on the user's real current score.
+
+**Changed (all additive):**
+- **`lib/credit-simulator.ts`** (new) — `VANTAGESCORE_3_WEIGHTS` (40/34/13/8/5, "amounts owed" cluster collapsed into utilization), piecewise health curves (util/payment/length/mix/inquiries), `revolvingUtilization()` (**$0-limit-safe** — fixes the EQ >100% bug), `simulate(input, scenario)` → per-bureau `{baseScore, estimatedScore, estimatedRange, waterfall}` with non-additive marginal waterfall + gain conservatism (0.85) + MAX_GAIN cap (120), `buildSuggestedScenarios()` (per-card + combined "pay all under 10%", ranked, capped), `buildAnalysis()` (toAnalysis + scenarios).
+- **`app/api/simulate/route.ts`** (new) — `POST { reportId, scenario }` → loads facts → `simulate()`.
+- **`app/api/analyze` + `/api/status`** — now return `analysis.suggestedScenarios` populated (via `buildAnalysis`), capped by `RECOMMENDATIONS_MAX_N` (default 5).
+- **`lib/credit-extraction.ts`** — `toAnalysis` revolving-utilization made $0-limit-safe.
+- **Frontend contract §9** rewritten to the real `scenario` shape + §9.2 recommends updating the "How Your Score Is Calculated" panel to VantageScore weights (currently shows FICO).
+
+**Hand-validated magnitudes** (Experian 643, 87% util): pay CITI→10% ≈ +49; pay all three →10% ≈ +108 (damped/capped); waterfall sums correctly and is non-additive. Assertive but defensible; `MAX_GAIN`/conservatism tunable.
+
+**Verified:** `tsc --noEmit` clean. BAT untouched. ⏳ Deploy + end-to-end validation pending (curl `/api/analyze` for suggestedScenarios, `/api/simulate` for projections).
+
+**Open / follow-ups:**
+- Length-of-history factor uses frontend-provided `lengthYears` (we don't extract account-open dates yet); add `opened` to extraction later to derive it server-side.
+- "Fastest Path to 850" button has no dedicated endpoint yet — frontend can call `/api/simulate` with an aggressive scenario, or add a helper later.
+- `/api/delete` (contract §10) still Phase 4.
+
+**Next:** deploy + validate Phase 3; then Phase 4 (cleanup cron, user delete, rate limiting) or wire the AI phrasing pass for scenarios.
 
 ---
 
