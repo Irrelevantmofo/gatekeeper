@@ -10,7 +10,11 @@
 // ── Types (mirror the strict JSON schema below) ──────────────────────────────
 export interface PerBureauAccount {
   bureau: string
-  status: string | null // "open" | "closed" | "paid" | ...
+  // The account's OPEN/CLOSED state (from the report's "Account Status" row).
+  account_status: "open" | "closed" | "paid" | "transferred" | "derogatory" | "unknown" | null
+  // The current payment standing (from the "Payment Status" row): "current" | "30" | "collection" | ...
+  // DISTINCT from account_status — both open and closed accounts can read "current".
+  payment_status: string | null
   balance: number | null
   credit_limit: number | null
   past_due: number | null
@@ -109,10 +113,11 @@ export const EXTRACTION_JSON_SCHEMA = {
             items: {
               type: "object",
               additionalProperties: false,
-              required: ["bureau", "status", "balance", "credit_limit", "past_due"],
+              required: ["bureau", "account_status", "payment_status", "balance", "credit_limit", "past_due"],
               properties: {
                 bureau: { type: "string" },
-                status: { type: ["string", "null"] },
+                account_status: { type: ["string", "null"], enum: ["open", "closed", "paid", "transferred", "derogatory", "unknown", null] },
+                payment_status: { type: ["string", "null"] },
                 balance: { type: ["number", "null"] },
                 credit_limit: { type: ["number", "null"] },
                 past_due: { type: ["number", "null"] },
@@ -159,6 +164,7 @@ export const EXTRACTION_SYSTEM_PROMPT = [
   "For every score, copy the bureau's Risk Factors / reason codes verbatim into reason_codes.",
   "Set score_model to the exact model named (e.g. 'VantageScore 3.0'). Set report_type to '3B' if three bureaus are present, else '1B'.",
   "For accounts: classify type as one of revolving | installment | mortgage | auto | other. Set ownership from the report (individual | joint | authorized_user; use 'unknown' if unclear). recent_late_marks = count of 30/60/90/120+ day late marks in the last 24 months of the payment grid.",
+  "CRITICAL — two DIFFERENT status fields per bureau, do not confuse them: account_status comes from the report's 'Account Status' row and is the OPEN/CLOSED state (normalize to open | closed | paid | transferred | derogatory | unknown). payment_status comes from the separate 'Payment Status' row and is the current standing (e.g. 'current', '30', '60', 'collection'). Both an open and a closed account can show payment_status 'Current' — never copy the payment status into account_status.",
   "If a value is absent on a given bureau, use null. If an account is missing on a bureau, omit that bureau from per_bureau.",
   "PRIVACY: do NOT extract or output SSN, date of birth, street addresses, employers, or full account numbers. Those are not needed.",
 ].join("\n")
@@ -167,10 +173,11 @@ export const EXTRACTION_SYSTEM_PROMPT = [
 // Mirrors the real sample (plan §17) so the full pipeline + frontend can be
 // tested end-to-end without an OpenAI key. Clearly flagged via report_meta.vendor.
 export function buildMockExtraction(): RawExtraction {
-  const per = (status: string, balance: number, limit: number): PerBureauAccount[] =>
+  const per = (accountStatus: PerBureauAccount["account_status"], balance: number, limit: number): PerBureauAccount[] =>
     ["TransUnion", "Experian", "Equifax"].map((bureau) => ({
       bureau,
-      status,
+      account_status: accountStatus,
+      payment_status: "current",
       balance,
       credit_limit: limit,
       past_due: 0,
@@ -201,7 +208,7 @@ export function buildMockExtraction(): RawExtraction {
       { creditor: "CITI", type: "revolving", detail: "Credit Card", ownership: "individual", recent_late_marks: 0, per_bureau: per("open", 5104, 5440) },
       { creditor: "CAPITAL ONE", type: "revolving", detail: "Credit Card", ownership: "individual", recent_late_marks: 0, per_bureau: per("open", 4440, 4500) },
       { creditor: "CBNA", type: "revolving", detail: "Charge account", ownership: "individual", recent_late_marks: 0, per_bureau: per("open", 2966, 4200) },
-      { creditor: "CAP ONE", type: "revolving", detail: "Credit Card", ownership: "authorized_user", recent_late_marks: 0, per_bureau: [{ bureau: "Equifax", status: "open", balance: 3391, credit_limit: 4500, past_due: 0 }] },
+      { creditor: "CAP ONE", type: "revolving", detail: "Credit Card", ownership: "authorized_user", recent_late_marks: 0, per_bureau: [{ bureau: "Equifax", account_status: "open", payment_status: "current", balance: 3391, credit_limit: 4500, past_due: 0 }] },
       { creditor: "ACHIEVE PERSONAL LOANS", type: "installment", detail: "Unsecured loan", ownership: "individual", recent_late_marks: 0, per_bureau: per("open", 36402, 50000) },
     ],
     inquiries: [
@@ -220,11 +227,11 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
 }
 
-const isOpen = (status: string | null) => (status ?? "").toLowerCase() === "open"
+const isOpen = (accountStatus: PerBureauAccount["account_status"]) => (accountStatus ?? "").toLowerCase() === "open"
 
 // Only individually-owned, open, revolving accounts can be "paid down" by the user.
 function isActionable(acct: ExtractedAccount): boolean {
-  return acct.type === "revolving" && acct.ownership === "individual" && acct.per_bureau.some((b) => isOpen(b.status))
+  return acct.type === "revolving" && acct.ownership === "individual" && acct.per_bureau.some((b) => isOpen(b.account_status))
 }
 
 export function toAnalysis(reportId: string, raw: RawExtraction) {
@@ -236,7 +243,7 @@ export function toAnalysis(reportId: string, raw: RawExtraction) {
       for (const a of raw.accounts) {
         if (!filter(a)) continue
         const b = a.per_bureau.find((x) => x.bureau === bureau)
-        if (b && isOpen(b.status)) total += pick(b) ?? 0
+        if (b && isOpen(b.account_status)) total += pick(b) ?? 0
       }
       return { bureau, value: total }
     })
@@ -254,7 +261,8 @@ export function toAnalysis(reportId: string, raw: RawExtraction) {
     note: a.ownership === "authorized_user" ? "You're an authorized user on this account — paying it down may not be in your control." : undefined,
     perBureau: a.per_bureau.map((b) => ({
       bureau: b.bureau,
-      status: b.status,
+      status: b.account_status, // frontend contract §8 "status" = account open/closed state
+      paymentStatus: b.payment_status,
       balance: b.balance,
       creditLimit: b.credit_limit,
       utilizationPct: b.credit_limit && b.credit_limit > 0 && b.balance != null ? b.balance / b.credit_limit : null,
@@ -275,7 +283,7 @@ export function toAnalysis(reportId: string, raw: RawExtraction) {
     summary: {
       openAccounts: bureaus.map((bureau) => ({
         bureau,
-        value: raw.accounts.filter((a) => a.per_bureau.some((b) => b.bureau === bureau && isOpen(b.status))).length,
+        value: raw.accounts.filter((a) => a.per_bureau.some((b) => b.bureau === bureau && isOpen(b.account_status))).length,
       })),
       revolvingUtilization: bureaus.map((bureau, idx) => {
         const lim = revolvingLimits[idx]?.value ?? 0

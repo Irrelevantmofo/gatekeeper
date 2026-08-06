@@ -16,7 +16,7 @@
 |-------|-------|--------|
 | **0** — Accounts & agreements | OpenAI account/billing, ZDR/DPA, Supabase project, legal review of consent copy | ⏳ In progress (Supabase project live) |
 | **1** — Consent + gate + storage path | Supabase schema/bucket, `lib/supabase.ts`, `/api/consent`, `/api/upload-url` | 🟡 Foundation + routes built (typecheck clean); live test pending env vars |
-| **2** — Extraction | `/api/analyze` → OpenAI vision + Structured Outputs → persist → delete PDF → tag | 🟡 Built (mock-capable); real OpenAI pending key + validation |
+| **2** — Extraction | `/api/analyze` → OpenAI vision + Structured Outputs → persist → delete PDF → tag | ✅ Working (real OpenRouter/Luna). `status` split into account_status/payment_status — applied; redeploy + re-validate pending |
 | **3** — Simulator | deterministic `simulate()` engine + `/api/simulate`, suggested-scenario curation | ⬜ Not started |
 | **4** — Retention & rights | `/api/cleanup` cron, user-initiated delete, IP/global rate limiting, log scrubbing | ⬜ Not started |
 | **5** — Hardening/scale | async analysis (queue + poll/Realtime), cost dashboards, SSN/account masking | ⬜ Not started |
@@ -160,6 +160,20 @@ Set in `.env.local` (local) and Vercel (prod). Full reference: [`../.env.example
 - **`.env.example`** — `LLM_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`.
 
 **Verified:** `tsc --noEmit` clean. Mock still default when no key. BAT untouched.
+
+### 2026-08-06 — Live validation: real report through OpenRouter/Luna ✅ (+1 fix)
+
+**First real end-to-end run** (report `813e89b8`): PDF (4.2 MB IdentityIQ) → OpenRouter `openai/gpt-5.6-luna` → 3 scores + **37 accounts** extracted → persisted → **PDF deleted** (pdf_deleted_at set) → status analyzed. **Cost ~$0.014**, ~37s. Confirms real provider path, retention delete, and cost estimate (§7.4).
+
+**Accuracy (spot-check vs the actual report) — excellent:**
+- Scores EXACT: TU 646 / EX 643 / EQ 639. Reason codes verbatim; correctly **empty for Equifax** (report had no Equifax factors).
+- Balances/limits exact incl. the hard **per-bureau divergence** (Capital One TU 4440 vs EX/EQ 4218). Installment (ACHIEVEPL) handled (no credit limit).
+
+**⚠️ Bug found — `status` field captured PAYMENT status, not ACCOUNT status.** Luna put "Current" (payment status) into `per_bureau.status` for both open AND closed accounts, so the open/closed distinction is lost. This breaks downstream `isOpen()` → `actionable`, `summary.openAccounts`, and `summary.revolvingUtilization` all read as closed/0. **Fix:** tighten the extraction prompt + schema to capture account status (open|closed|paid|transferred) distinctly from payment status (keep payment/delinquency separately). Re-run one report (~cents) to validate. Must land before Phase 3 (actionable accounts drive the simulator).
+
+**Also:** orphan report `bc8d42c1` stuck at `awaiting_upload` with its 4.2 MB PDF still in the bucket (earlier attempt before analyze was deployed) — the class the Phase 4 sweep will handle.
+
+**Fix applied** (`lib/credit-extraction.ts`): `per_bureau.status` → split into `account_status` (open/closed/paid/…) + `payment_status`; prompt made explicit; schema + mock + `toAnalysis` (isOpen/actionable/utilization/summary) updated; `tsc` clean. **Pending:** redeploy, then re-validate on a real report. Cleanest orphan cleanup = point the fixed `/api/analyze` at `bc8d42c1` (its PDF is still in the bucket) — that re-validates the fix AND deletes the PDF via the proper storage API in one shot. (Raw SQL delete of `storage.objects` would orphan the S3 blob — avoid for credit PII.)
 
 ---
 
