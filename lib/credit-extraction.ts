@@ -11,7 +11,9 @@
 export interface PerBureauAccount {
   bureau: string
   // The account's OPEN/CLOSED state (from the report's "Account Status" row).
-  account_status: "open" | "closed" | "paid" | "transferred" | "derogatory" | "unknown" | null
+  // Non-nullable enum ("unknown" when unstated) — a nullable enum corrupts the
+  // strict structured-output grammar and yields empty extractions.
+  account_status: "open" | "closed" | "paid" | "transferred" | "derogatory" | "unknown"
   // The current payment standing (from the "Payment Status" row): "current" | "30" | "collection" | ...
   // DISTINCT from account_status — both open and closed accounts can read "current".
   payment_status: string | null
@@ -116,7 +118,7 @@ export const EXTRACTION_JSON_SCHEMA = {
               required: ["bureau", "account_status", "payment_status", "balance", "credit_limit", "past_due"],
               properties: {
                 bureau: { type: "string" },
-                account_status: { type: ["string", "null"], enum: ["open", "closed", "paid", "transferred", "derogatory", "unknown", null] },
+                account_status: { type: "string", enum: ["open", "closed", "paid", "transferred", "derogatory", "unknown"] },
                 payment_status: { type: ["string", "null"] },
                 balance: { type: ["number", "null"] },
                 credit_limit: { type: ["number", "null"] },
@@ -164,7 +166,7 @@ export const EXTRACTION_SYSTEM_PROMPT = [
   "For every score, copy the bureau's Risk Factors / reason codes verbatim into reason_codes.",
   "Set score_model to the exact model named (e.g. 'VantageScore 3.0'). Set report_type to '3B' if three bureaus are present, else '1B'.",
   "For accounts: classify type as one of revolving | installment | mortgage | auto | other. Set ownership from the report (individual | joint | authorized_user; use 'unknown' if unclear). recent_late_marks = count of 30/60/90/120+ day late marks in the last 24 months of the payment grid.",
-  "CRITICAL — two DIFFERENT status fields per bureau, do not confuse them: account_status comes from the report's 'Account Status' row and is the OPEN/CLOSED state (normalize to open | closed | paid | transferred | derogatory | unknown). payment_status comes from the separate 'Payment Status' row and is the current standing (e.g. 'current', '30', '60', 'collection'). Both an open and a closed account can show payment_status 'Current' — never copy the payment status into account_status.",
+  "CRITICAL — two DIFFERENT status fields per bureau, do not confuse them: account_status comes from the report's 'Account Status' row and is the OPEN/CLOSED state (normalize to exactly one of: open | closed | paid | transferred | derogatory | unknown; use 'unknown' if a bureau doesn't state it — never leave it blank). payment_status comes from the separate 'Payment Status' row and is the current standing (e.g. 'current', '30', '60', 'collection'; may be null). Both an open and a closed account can show payment_status 'Current' — never copy the payment status into account_status.",
   "If a value is absent on a given bureau, use null. If an account is missing on a bureau, omit that bureau from per_bureau.",
   "PRIVACY: do NOT extract or output SSN, date of birth, street addresses, employers, or full account numbers. Those are not needed.",
 ].join("\n")

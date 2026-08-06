@@ -175,6 +175,18 @@ Set in `.env.local` (local) and Vercel (prod). Full reference: [`../.env.example
 
 **Fix applied** (`lib/credit-extraction.ts`): `per_bureau.status` → split into `account_status` (open/closed/paid/…) + `payment_status`; prompt made explicit; schema + mock + `toAnalysis` (isOpen/actionable/utilization/summary) updated; `tsc` clean. **Pending:** redeploy, then re-validate on a real report. Cleanest orphan cleanup = point the fixed `/api/analyze` at `bc8d42c1` (its PDF is still in the bucket) — that re-validates the fix AND deletes the PDF via the proper storage API in one shot. (Raw SQL delete of `storage.objects` would orphan the S3 blob — avoid for credit PII.)
 
+### 2026-08-07 — Re-validation attempt: nullable-enum bug found & fixed
+
+Deployed the first `status`-fix and ran `/api/analyze` on the orphan (`bc8d42c1`, PDF still in bucket).
+- **Orphan cleanup: ✅** PDF read (prompt_tokens 46,771) then **deleted** — bucket now empty; report `analyzed`.
+- **Extraction: ❌ empty** (completion_tokens 141; scores/accounts []). Root cause: I made `account_status` a **nullable enum** (`type:["string","null"]` + `null` inside `enum`), which corrupted the strict structured-output grammar → schema-valid-but-empty result. The working fields (`ownership`, `report_type`) are **non-nullable** enums.
+
+**Re-fix (uncommitted, tsc clean):**
+- `account_status` → non-nullable enum, `"unknown"` instead of null; prompt updated to match.
+- `isValid()` hardened to require `scores.length > 0`, so an empty extraction triggers the repair retry and then fails loudly instead of persisting as a silent blank "analyzed".
+
+**Pending:** redeploy, then **one fresh upload** to validate (orphan was consumed, so can't reuse it). Expect: 3 scores + full accounts, `account_status` reading open/closed (not "Current"), `report_type` 3B.
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.

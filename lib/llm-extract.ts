@@ -112,7 +112,10 @@ async function callOpenRouter(model: string, apiKey: string, pdfBase64: string, 
 // ── Shared validate + repair-retry orchestration ──────────────────────────────
 function isValid(x: unknown): x is RawExtraction {
   const r = x as RawExtraction
-  return !!r && Array.isArray(r.scores) && Array.isArray(r.accounts) && !!r.report_meta
+  // Require at least one score: a real report always has one, and an empty
+  // result (e.g. from a bad schema/grammar) must trigger the repair retry and
+  // ultimately fail loudly rather than persist as a silent "analyzed" blank.
+  return !!r && !!r.report_meta && Array.isArray(r.scores) && r.scores.length > 0 && Array.isArray(r.accounts)
 }
 
 export async function extractReportFacts(
