@@ -101,6 +101,20 @@ Set in `.env.local` (local) and Vercel (prod). Full reference: [`../.env.example
 
 **Next:** Phase 2 — `/api/analyze` (download PDF → OpenAI vision + Structured Outputs against the §17 tri-bureau schema → persist `report_analysis` → delete PDF → apply credit used-tag).
 
+### 2026-08-06 — Fix: Vercel `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`
+
+**Symptom:** Vercel build failed at `pnpm install` — *"the current 'overrides' configuration doesn't match the value found in the lockfile."*
+
+**Cause:** the earlier `corepack pnpm add @supabase/supabase-js` pulled **pnpm 11**, which ignores `package.json`'s `pnpm.overrides` (the `hono: 4.12.25` pin) and rewrote `pnpm-lock.yaml` **without** the top-level `overrides:` block. Vercel runs pnpm 9 (reads `pnpm.overrides`), so package.json and the lockfile disagreed → frozen install refused.
+
+**Fix:**
+- Pinned **`"packageManager": "pnpm@9.15.9"`** in `package.json` so corepack + Vercel use the same pnpm that honors `pnpm.overrides` (prevents recurrence).
+- Regenerated the lockfile with pnpm 9.15.9 (fresh `install`) — the `overrides:\n  hono: 4.12.25` block is back at the top.
+
+**Verified:** `pnpm install --frozen-lockfile` (what Vercel runs) passes; `tsc --noEmit` clean. Only `package.json` + `pnpm-lock.yaml` changed.
+
+**Action to deploy:** commit `package.json` + `pnpm-lock.yaml` and redeploy.
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.
