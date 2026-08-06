@@ -1,0 +1,295 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Credit report extraction — schema, types, mock, and the facts→analysis mapper.
+//
+// The LLM ONLY extracts facts into `RawExtraction` (plan §17.2 tri-bureau shape).
+// It never computes scores. Downstream: the deterministic engine (Phase 3) does
+// the math; here we just shape the extracted facts into the frontend `analysis`
+// object (frontend contract §8).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Types (mirror the strict JSON schema below) ──────────────────────────────
+export interface PerBureauAccount {
+  bureau: string
+  status: string | null // "open" | "closed" | "paid" | ...
+  balance: number | null
+  credit_limit: number | null
+  past_due: number | null
+}
+
+export interface ExtractedAccount {
+  creditor: string
+  type: string // revolving | installment | mortgage | auto | other
+  detail: string | null
+  ownership: "individual" | "joint" | "authorized_user" | "unknown"
+  recent_late_marks: number | null // derived from the 2-year payment grid
+  per_bureau: PerBureauAccount[]
+}
+
+export interface ExtractedScore {
+  bureau: string
+  value: number | null
+  band: string | null
+  reason_codes: string[]
+}
+
+export interface ExtractedInquiry {
+  creditor: string
+  date: string | null
+  bureau: string | null
+  business_type: string | null
+}
+
+export interface ExtractedPublicRecord {
+  kind: string
+  date: string | null
+}
+
+export interface RawExtraction {
+  report_meta: {
+    vendor: string | null
+    report_type: "3B" | "1B"
+    report_date: string | null
+    score_model: string | null
+    scale: number[]
+  }
+  scores: ExtractedScore[]
+  accounts: ExtractedAccount[]
+  inquiries: ExtractedInquiry[]
+  public_records: ExtractedPublicRecord[]
+}
+
+// ── Strict JSON Schema for OpenAI Structured Outputs (plan §7.3 / §17.2) ──────
+// Strict mode rules: every property listed in `required`, additionalProperties
+// false, nullability via ["type","null"].
+export const EXTRACTION_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["report_meta", "scores", "accounts", "inquiries", "public_records"],
+  properties: {
+    report_meta: {
+      type: "object",
+      additionalProperties: false,
+      required: ["vendor", "report_type", "report_date", "score_model", "scale"],
+      properties: {
+        vendor: { type: ["string", "null"] },
+        report_type: { type: "string", enum: ["3B", "1B"] },
+        report_date: { type: ["string", "null"] },
+        score_model: { type: ["string", "null"] },
+        scale: { type: "array", items: { type: "number" } },
+      },
+    },
+    scores: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["bureau", "value", "band", "reason_codes"],
+        properties: {
+          bureau: { type: "string" },
+          value: { type: ["integer", "null"] },
+          band: { type: ["string", "null"] },
+          reason_codes: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
+    accounts: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["creditor", "type", "detail", "ownership", "recent_late_marks", "per_bureau"],
+        properties: {
+          creditor: { type: "string" },
+          type: { type: "string" },
+          detail: { type: ["string", "null"] },
+          ownership: { type: "string", enum: ["individual", "joint", "authorized_user", "unknown"] },
+          recent_late_marks: { type: ["integer", "null"] },
+          per_bureau: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["bureau", "status", "balance", "credit_limit", "past_due"],
+              properties: {
+                bureau: { type: "string" },
+                status: { type: ["string", "null"] },
+                balance: { type: ["number", "null"] },
+                credit_limit: { type: ["number", "null"] },
+                past_due: { type: ["number", "null"] },
+              },
+            },
+          },
+        },
+      },
+    },
+    inquiries: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["creditor", "date", "bureau", "business_type"],
+        properties: {
+          creditor: { type: "string" },
+          date: { type: ["string", "null"] },
+          bureau: { type: ["string", "null"] },
+          business_type: { type: ["string", "null"] },
+        },
+      },
+    },
+    public_records: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "date"],
+        properties: {
+          kind: { type: "string" },
+          date: { type: ["string", "null"] },
+        },
+      },
+    },
+  },
+} as const
+
+// ── System prompt (keep STABLE so the prompt-cache prefix bills at 10%, §7.4) ─
+export const EXTRACTION_SYSTEM_PROMPT = [
+  "You extract structured facts from a US consumer credit report PDF.",
+  "This is a tri-bureau report: TransUnion, Experian, and Equifax appear side by side and their values DIFFER per bureau. Capture each bureau's values separately in per_bureau.",
+  "Return ONLY data that conforms to the provided JSON schema. Do not compute or estimate credit scores — extract only what the report states.",
+  "For every score, copy the bureau's Risk Factors / reason codes verbatim into reason_codes.",
+  "Set score_model to the exact model named (e.g. 'VantageScore 3.0'). Set report_type to '3B' if three bureaus are present, else '1B'.",
+  "For accounts: classify type as one of revolving | installment | mortgage | auto | other. Set ownership from the report (individual | joint | authorized_user; use 'unknown' if unclear). recent_late_marks = count of 30/60/90/120+ day late marks in the last 24 months of the payment grid.",
+  "If a value is absent on a given bureau, use null. If an account is missing on a bureau, omit that bureau from per_bureau.",
+  "PRIVACY: do NOT extract or output SSN, date of birth, street addresses, employers, or full account numbers. Those are not needed.",
+].join("\n")
+
+// ── Mock extraction (used when OPENAI_API_KEY is absent or CREDIT_ANALYZE_MOCK) ─
+// Mirrors the real sample (plan §17) so the full pipeline + frontend can be
+// tested end-to-end without an OpenAI key. Clearly flagged via report_meta.vendor.
+export function buildMockExtraction(): RawExtraction {
+  const per = (status: string, balance: number, limit: number): PerBureauAccount[] =>
+    ["TransUnion", "Experian", "Equifax"].map((bureau) => ({
+      bureau,
+      status,
+      balance,
+      credit_limit: limit,
+      past_due: 0,
+    }))
+
+  return {
+    report_meta: {
+      vendor: "MOCK (no OpenAI key set)",
+      report_type: "3B",
+      report_date: "2026-07-14",
+      score_model: "VantageScore 3.0",
+      scale: [300, 850],
+    },
+    scores: [
+      {
+        bureau: "TransUnion",
+        value: 646,
+        band: "Fair",
+        reason_codes: [
+          "You have too many delinquent or derogatory accounts",
+          "Balances on revolving accounts are too high compared to credit limits",
+        ],
+      },
+      { bureau: "Experian", value: 643, band: "Fair", reason_codes: ["Too many of the delinquencies on your accounts are recent"] },
+      { bureau: "Equifax", value: 639, band: "Fair", reason_codes: ["The balances on your accounts are too high compared to loan amounts"] },
+    ],
+    accounts: [
+      { creditor: "CITI", type: "revolving", detail: "Credit Card", ownership: "individual", recent_late_marks: 0, per_bureau: per("open", 5104, 5440) },
+      { creditor: "CAPITAL ONE", type: "revolving", detail: "Credit Card", ownership: "individual", recent_late_marks: 0, per_bureau: per("open", 4440, 4500) },
+      { creditor: "CBNA", type: "revolving", detail: "Charge account", ownership: "individual", recent_late_marks: 0, per_bureau: per("open", 2966, 4200) },
+      { creditor: "CAP ONE", type: "revolving", detail: "Credit Card", ownership: "authorized_user", recent_late_marks: 0, per_bureau: [{ bureau: "Equifax", status: "open", balance: 3391, credit_limit: 4500, past_due: 0 }] },
+      { creditor: "ACHIEVE PERSONAL LOANS", type: "installment", detail: "Unsecured loan", ownership: "individual", recent_late_marks: 0, per_bureau: per("open", 36402, 50000) },
+    ],
+    inquiries: [
+      { creditor: "PORSCHEFINSE", date: "2026-03-24", bureau: "TransUnion", business_type: "Auto Financing" },
+      { creditor: "ALLY FINANCIAL", date: "2026-02-25", bureau: "Experian", business_type: "Auto Financing" },
+    ],
+    public_records: [],
+  }
+}
+
+// ── Facts → frontend `analysis` object (frontend contract §8) ─────────────────
+const DISCLAIMER =
+  "Estimated only — not a guarantee. We are not FICO or VantageScore, and we are not a credit-repair organization. We do not dispute items on your behalf."
+
+function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+}
+
+const isOpen = (status: string | null) => (status ?? "").toLowerCase() === "open"
+
+// Only individually-owned, open, revolving accounts can be "paid down" by the user.
+function isActionable(acct: ExtractedAccount): boolean {
+  return acct.type === "revolving" && acct.ownership === "individual" && acct.per_bureau.some((b) => isOpen(b.status))
+}
+
+export function toAnalysis(reportId: string, raw: RawExtraction) {
+  const bureaus = raw.scores.map((s) => s.bureau)
+
+  const perBureauSum = (pick: (b: PerBureauAccount) => number | null, filter: (a: ExtractedAccount) => boolean) =>
+    bureaus.map((bureau) => {
+      let total = 0
+      for (const a of raw.accounts) {
+        if (!filter(a)) continue
+        const b = a.per_bureau.find((x) => x.bureau === bureau)
+        if (b && isOpen(b.status)) total += pick(b) ?? 0
+      }
+      return { bureau, value: total }
+    })
+
+  const revolvingBalances = perBureauSum((b) => b.balance, (a) => a.type === "revolving")
+  const revolvingLimits = perBureauSum((b) => b.credit_limit, (a) => a.type === "revolving")
+
+  const accounts = raw.accounts.map((a, i) => ({
+    accountId: `acct_${i}_${slug(a.creditor)}`,
+    creditor: a.creditor,
+    type: a.type,
+    detail: a.detail,
+    ownership: a.ownership,
+    actionable: isActionable(a),
+    note: a.ownership === "authorized_user" ? "You're an authorized user on this account — paying it down may not be in your control." : undefined,
+    perBureau: a.per_bureau.map((b) => ({
+      bureau: b.bureau,
+      status: b.status,
+      balance: b.balance,
+      creditLimit: b.credit_limit,
+      utilizationPct: b.credit_limit && b.credit_limit > 0 && b.balance != null ? b.balance / b.credit_limit : null,
+      pastDue: b.past_due,
+    })),
+  }))
+
+  return {
+    reportId,
+    reportMeta: {
+      vendor: raw.report_meta.vendor,
+      reportType: raw.report_meta.report_type,
+      reportDate: raw.report_meta.report_date,
+      scoreModel: raw.report_meta.score_model,
+      scale: raw.report_meta.scale,
+    },
+    scores: raw.scores.map((s) => ({ bureau: s.bureau, value: s.value, band: s.band, reasonCodes: s.reason_codes })),
+    summary: {
+      openAccounts: bureaus.map((bureau) => ({
+        bureau,
+        value: raw.accounts.filter((a) => a.per_bureau.some((b) => b.bureau === bureau && isOpen(b.status))).length,
+      })),
+      revolvingUtilization: bureaus.map((bureau, idx) => {
+        const lim = revolvingLimits[idx]?.value ?? 0
+        const bal = revolvingBalances[idx]?.value ?? 0
+        return { bureau, value: lim > 0 ? bal / lim : null }
+      }),
+      hardInquiries24mo: bureaus.map((bureau) => ({ bureau, value: raw.inquiries.filter((q) => q.bureau === bureau).length })),
+      publicRecords: bureaus.map((bureau) => ({ bureau, value: raw.public_records.length })),
+    },
+    accounts,
+    // Phase 3 will populate these (deterministic simulator + AI/template curation).
+    suggestedScenarios: [],
+    recommendationsMeta: { cappedAt: 0, generatedBy: "pending" as const },
+    coachNote: null as string | null,
+    disclaimer: DISCLAIMER,
+  }
+}

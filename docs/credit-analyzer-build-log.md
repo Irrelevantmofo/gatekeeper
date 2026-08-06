@@ -16,7 +16,7 @@
 |-------|-------|--------|
 | **0** — Accounts & agreements | OpenAI account/billing, ZDR/DPA, Supabase project, legal review of consent copy | ⏳ In progress (Supabase project live) |
 | **1** — Consent + gate + storage path | Supabase schema/bucket, `lib/supabase.ts`, `/api/consent`, `/api/upload-url` | 🟡 Foundation + routes built (typecheck clean); live test pending env vars |
-| **2** — Extraction | `/api/analyze` → OpenAI vision + Structured Outputs → persist → delete PDF → tag | ⬜ Not started |
+| **2** — Extraction | `/api/analyze` → OpenAI vision + Structured Outputs → persist → delete PDF → tag | 🟡 Built (mock-capable); real OpenAI pending key + validation |
 | **3** — Simulator | deterministic `simulate()` engine + `/api/simulate`, suggested-scenario curation | ⬜ Not started |
 | **4** — Retention & rights | `/api/cleanup` cron, user-initiated delete, IP/global rate limiting, log scrubbing | ⬜ Not started |
 | **5** — Hardening/scale | async analysis (queue + poll/Realtime), cost dashboards, SSN/account masking | ⬜ Not started |
@@ -38,7 +38,9 @@ Set in `.env.local` (local) and Vercel (prod). Full reference: [`../.env.example
 | `CREDIT_GATE_ENFORCED` | 🟡 optional | **Defaults `false`** (gate observe-only, no lockout) — set `true` for production |
 | `CREDIT_USED_TAG` | 🟡 optional | Defaults `credit-analyzer-used`; read by `/api/consent` gate |
 | `SWEEP_TTL_MINUTES` | 🟡 optional | Defaults 60; used by `/api/upload-url` to set `sweep_after` |
-| `OPENAI_API_KEY`, `OPENAI_MODEL` | ⬜ later (Phase 2) | Not wired yet |
+| `OPENAI_API_KEY` | 🟡 optional now | Unset → `/api/analyze` uses **mock** extraction. Set to enable real Luna extraction. |
+| `OPENAI_MODEL` | 🟡 optional | Defaults `gpt-5.6-luna` (plan §7.4) |
+| `CREDIT_ANALYZE_MOCK` | 🟡 optional | Force mock even with a key set (default false) |
 | `RATE_LIMIT_PER_IP_DAY`, `RATE_LIMIT_GLOBAL_DAY` | ⬜ later (Phase 4) | Not wired yet |
 
 ---
@@ -114,6 +116,50 @@ Set in `.env.local` (local) and Vercel (prod). Full reference: [`../.env.example
 **Verified:** `pnpm install --frozen-lockfile` (what Vercel runs) passes; `tsc --noEmit` clean. Only `package.json` + `pnpm-lock.yaml` changed.
 
 **Action to deploy:** commit `package.json` + `pnpm-lock.yaml` and redeploy.
+
+### 2026-08-06 — Research/decision: OpenAI model for extraction
+
+**Goal:** pick the cheapest OpenAI model with good enough accuracy for tri-bureau PDF extraction.
+
+**Findings (web research, verified Aug 2026 pricing):** GPT-5.6 family (Sol/Terra/Luna), all with vision + Structured Outputs + 1.05M context. Rates per 1M in/out: Sol $5/$30, **Terra $2/$12**, **Luna $0.20/$1.20** (cached input = 10%). Chunking a PDF across calls costs 3–7% accuracy; stable-prompt caching saves 40–60% on the input prefix.
+
+**Decision:** default **`gpt-5.6-luna`** (cheapest vision tier), with **`gpt-5.6-terra` as the accuracy fallback**. Lower-risk because the LLM only extracts facts (deterministic engine does the math) + strict-schema validation + repair retry. **Requires a validation pass** (3–5 redacted reports, Luna vs Terra, checking per-bureau balance/limit alignment) before production. Model stays in `OPENAI_MODEL` env var → switch without a deploy. Rough cost ~$0.02/report (Luna) vs ~$0.20 (Terra).
+
+**Changed:** plan §7.4 rewritten with verified pricing + recommendation; `.env.example` `OPENAI_MODEL` default → `gpt-5.6-luna`. (No code — OpenAI not wired until Phase 2.)
+
+### 2026-08-06 — Phase 2: extraction (`/api/analyze` + `/api/status`)
+
+**Goal:** turn an uploaded PDF into persisted structured facts and return the analysis — testable end-to-end **without** an OpenAI key.
+
+**Changed (all additive):**
+- **`lib/credit-extraction.ts`** (new) — `RawExtraction` types + the strict tri-bureau **JSON schema** (plan §17.2), stable **system prompt** (privacy: no SSN/DOB/address), `buildMockExtraction()` (mirrors the real Sternberg sample), and `toAnalysis()` mapping facts → the frontend §8 object (3 bureau scores, per-bureau utilization, `actionable` flag on individual/open/revolving accounts, summary). `suggestedScenarios` intentionally empty (Phase 3).
+- **`lib/openai-extract.ts`** (new) — **isolated** OpenAI Responses API call via raw `fetch` (no SDK dep), strict Structured Output, `input_file` base64 PDF, one repair retry (§7.6). Clearly flagged to verify request/response field names when the key is wired.
+- **`app/api/analyze/route.ts`** (new) — `POST { reportId }`: status→processing → download PDF → extract (**mock if no `OPENAI_API_KEY`**, else Luna) → upsert `report_analysis` → **delete PDF** + set `pdf_deleted_at`/status→analyzed → return `{ status, mock, analysis }`. `runtime=nodejs`, `maxDuration=60`. Used-tag deferred (prod only, when gate enforced) to avoid polluting test contacts.
+- **`app/api/status/route.ts`** (new) — `GET ?reportId=` → `{ status }` / `{ status:"failed", error }` / `{ status:"analyzed", analysis }`.
+- **`lib/credit.ts`** — added `getOpenAIModel()`, `useMockExtraction()`, `applyCreditUsedTag()` (reuses `ghl.ts` constants read-only).
+- **`.env.example`** — `CREDIT_ANALYZE_MOCK`; **frontend contract §6** — marked analyze/status live in mock mode.
+
+**Mock mode:** with no `OPENAI_API_KEY`, `/api/analyze` still downloads + **deletes** the PDF (exercises retention plumbing) and returns a realistic tri-bureau analysis (`mock:true`). Flips to real Luna extraction the instant the key is set — same response shape.
+
+**Verified:** `tsc --noEmit` clean. BAT untouched (new code imports `ghl.ts` read-only). ⏳ **Live runtime test pending** — needs Supabase env vars + `next dev`; real OpenAI path unexercised until a key + the §7.4 validation pass.
+
+**Open / follow-ups:**
+- Validate real Luna extraction vs Terra on 3–5 redacted reports (plan §7.4) before production; confirm exact `gpt-5.6-luna` model id + Responses API field names in `lib/openai-extract.ts`.
+- Gate re-check inside `/api/analyze` skipped (observe-only mode); revisit when `CREDIT_GATE_ENFORCED=true`.
+
+**Next:** Phase 3 — deterministic `simulate()` engine + `/api/simulate`, and the suggested-scenario curation that fills `analysis.suggestedScenarios`.
+
+### 2026-08-06 — Decision + adapter: OpenRouter as LLM provider (compliance deferred)
+
+**Decision:** client chose **OpenRouter** ("as long as it's working"), explicitly **deprioritizing compliance for now**. Recorded as plan §16 locked decision + **open item 17 (REVISIT before real-PII launch)** — OpenRouter is a subprocessor needing DPA + ZDR + training opt-out + prompt-logging OFF + pinned provider, with legal sign-off. **Deferred debt, not resolved.** Use redacted/synthetic reports until then.
+
+**Changed:**
+- **`lib/llm-extract.ts`** (new, replaces `openai-extract.ts`) — provider dispatcher: OpenRouter (Chat Completions + `response_format` json_schema + `file` PDF part) or OpenAI (Responses API), selected by `LLM_PROVIDER`. Shared validate + repair-retry. Prominent compliance-deferred header comment.
+- **`lib/credit.ts`** — `getLlmProvider()` (default `openrouter`), `getProviderApiKey()`, `getExtractionModel()` (namespaced id `openai/gpt-5.6-luna` for OpenRouter), `useMockExtraction()` now provider-aware.
+- **`app/api/analyze/route.ts`** — uses the dispatcher; persists `model` as `"<provider>:<model>"`.
+- **`.env.example`** — `LLM_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`.
+
+**Verified:** `tsc --noEmit` clean. Mock still default when no key. BAT untouched.
 
 ---
 

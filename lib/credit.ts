@@ -43,3 +43,49 @@ export function parseClientIp(request: Request): string | null {
   if (!first) return null
   return /^[0-9a-fA-F:.]+$/.test(first) ? first : null
 }
+
+// LLM provider for extraction. Defaults to OpenRouter (client preference — see
+// plan §16 decision on OpenRouter + the DEFERRED compliance review). Set
+// LLM_PROVIDER=openai to call OpenAI directly instead.
+export type LlmProvider = "openrouter" | "openai"
+
+export function getLlmProvider(): LlmProvider {
+  return process.env.LLM_PROVIDER === "openai" ? "openai" : "openrouter"
+}
+
+export function getProviderApiKey(provider: LlmProvider = getLlmProvider()): string | undefined {
+  return provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.OPENAI_API_KEY
+}
+
+// Extraction model. OpenRouter uses namespaced ids (e.g. "openai/gpt-5.6-luna");
+// OpenAI-direct uses bare ids (e.g. "gpt-5.6-luna"). Luna is the cheapest vision
+// tier (plan §7.4). Confirm the exact id in the provider's dashboard.
+export function getExtractionModel(provider: LlmProvider = getLlmProvider()): string {
+  if (provider === "openrouter") return process.env.OPENROUTER_MODEL || "openai/gpt-5.6-luna"
+  return process.env.OPENAI_MODEL || "gpt-5.6-luna"
+}
+
+// Mock extraction runs when CREDIT_ANALYZE_MOCK=true or the active provider's key
+// is missing. Lets the full analyze pipeline be tested without spending on an LLM.
+export function useMockExtraction(): boolean {
+  return process.env.CREDIT_ANALYZE_MOCK === "true" || !getProviderApiKey()
+}
+
+// Applies the credit-analyzer used-tag to a GHL contact (plan §4.1, step 7).
+// Reuses lib/ghl.ts constants read-only (BAT untouched). GHL merges tags, so
+// this is idempotent.
+export async function applyCreditUsedTag(contactId: string, token: string): Promise<void> {
+  const { GHL_BASE_URL, GHL_API_VERSION } = await import("@/lib/ghl")
+  const res = await fetch(`${GHL_BASE_URL}/contacts/${contactId}/tags`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Version: GHL_API_VERSION,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({ tags: [getCreditUsedTag()] }),
+    cache: "no-store",
+  })
+  if (!res.ok) throw new Error(`GHL add credit tag failed (${res.status})`)
+}

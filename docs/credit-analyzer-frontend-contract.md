@@ -150,6 +150,8 @@ await fetch(uploadUrl, {
 
 ## 6. STEP 4 — Start analysis
 
+> ✅ **Now live (mock mode).** `/api/analyze` + `/api/status` are deployed. Until the backend sets an OpenAI key they return a **realistic MOCK** analysis (tri-bureau VantageScore sample) with `"mock": true` on the analyze response — so you can wire the loading screen and the 3-score display for real now, not against a stub. The shape is identical when real extraction turns on.
+
 `POST /api/analyze`
 
 **Request**

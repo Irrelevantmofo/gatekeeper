@@ -211,10 +211,32 @@ Illustrative extraction schema (the LLM fills this; the simulator consumes it). 
 }
 ```
 
-### 7.4 Model choice (as of Aug 2026)
-Current family is **GPT-5.6 (Sol / Terra / Luna)**; Structured Outputs + vision are supported. Rough public rates: Sol ~$5/$30, **Terra ~$2/$12**, **Luna ~$0.20/$1.20** per 1M input/output tokens. ([pricing](https://modelpricing.ai/models/openai))
-- **Recommendation:** start on **GPT-5.6 Terra** for extraction accuracy on messy report layouts; evaluate **Luna** to cut cost once the prompt is stable. Validate against a few real (redacted) reports before committing.
-- Keep the model name in an env var so we can switch without a deploy.
+### 7.4 Model choice (verified Aug 2026)
+Current family is **GPT-5.6 (Sol / Terra / Luna)** — GA July 9 2026, **1.05M-token context** on all three, **vision + Structured Outputs supported across the lineup**. Verified per-1M-token rates (after OpenAI's July 30 2026 cut to Terra/Luna):
+
+| Tier | Input | Output | Cached input (10%) | Fit |
+|------|-------|--------|--------------------|-----|
+| Sol (flagship) | $5.00 | $30.00 | $0.50 | Overkill for extraction |
+| **Terra** (mid) | $2.00 | $12.00 | $0.20 | Accuracy fallback |
+| **Luna** (budget) | **$0.20** | **$1.20** | $0.02 | **Default — cheapest with vision** |
+
+(Legacy `GPT-5.4 Nano` $0.20/$1.25 and `Mini` $0.75/$4.50 also exist but are superseded by Luna for our needs.)
+
+**Recommendation — Luna-first, Terra as fallback.** For lowest cost with good accuracy:
+- **Start on `gpt-5.6-luna`.** IdentityIQ reports are *digitally generated* (clean render, just a complex 3-column layout), which vision models read well — a budget tier is a reasonable first choice, and it's **~10× cheaper than Terra** on input.
+- **We have a safety net** that makes a budget model lower-risk: the LLM only *extracts facts* (the deterministic engine does the math), output is validated against a **strict JSON schema** with a one-shot repair retry (§7.6), and we never let it compute scores.
+- **Validate before trusting it (required).** Run 3–5 real (redacted) reports through Luna **and** Terra, diff the extracted JSON against hand-checked ground truth, focusing on the fields that actually matter: the three bureau scores, open-revolving **per-bureau balance/limit alignment** (the hardest part of the tri-column layout), and reason codes. If Luna misaligns per-bureau values, switch `OPENAI_MODEL` to `gpt-5.6-terra` — a config change, **no deploy** needed.
+
+**Rough per-report cost (order-of-magnitude, validate via logged `token_usage`):** a ~30-page tri-bureau report ≈ tens of thousands of vision input tokens + a few-thousand-token JSON output → **~$0.02/report on Luna vs ~$0.20 on Terra**. Prompt caching (below) cuts the input side further on warm runs.
+
+**Cost controls (apply regardless of tier):**
+- **Prompt caching** — keep the system + schema prompt **stable** so the long prefix bills at **10%** (cached input). This is why §7.2 stresses a stable schema.
+- **Don't chunk the PDF** — splitting across calls costs **3–7% accuracy** (industry finding); send the whole report in one request (well under the 272K long-context surcharge threshold and the 1.05M window).
+- **Cap pages** (§7.2) as a cost + latency guard.
+- **Batch API (−50%)** exists but is **async/24h** — not usable for the interactive "user waits ~30s" flow (§5 pattern A); only relevant if we move analysis fully async (Phase 5).
+- Keep the model in the **`OPENAI_MODEL`** env var so tier changes need no deploy.
+
+Sources: [aipricing.guru](https://www.aipricing.guru/openai-pricing/) · [costgoat](https://costgoat.com/pricing/openai-api) · [BenchLM](https://benchlm.ai/openai/api-pricing) · OCR-accuracy context: [Parseur vision doc guide](https://parseur.com/blog/vision-ai-document-processing) · [TokenMix](https://tokenmix.ai/blog/best-ai-for-document-processing)
 
 ### 7.5 Privacy of what we send (critical for this data)
 - **Default API behavior:** data sent via the API is **not used to train** OpenAI models, and is retained ≤ **30 days** for abuse monitoring, then deleted. ([enterprise privacy](https://openai.com/enterprise-privacy/))
@@ -464,6 +486,7 @@ Extends §10.
 **Locked:**
 - ✅ **"Questions" = PDF-derived curated what-if scenarios** (§14), *not* an interactive intake Q&A. Confirmed with client.
 - ✅ **Templated phrasing for v1**, AI phrasing pass as a fast-follow. Schema identical either way (§14.6); toggle via `RECOMMENDATIONS_AI_PHRASING`.
+- ✅ **LLM provider = OpenRouter** (client preference; default in code via `LLM_PROVIDER`, `gpt-5.6-luna` through it). Env-toggle to OpenAI-direct available. **⚠️ COMPLIANCE DEFERRED — see open item 17.**
 
 **Still open:**
 8. **Expose funding-tier goals in recommendations?** (§14.4) — recommend **yes**; strongest conversion hook. Which thresholds (660?).
@@ -475,6 +498,7 @@ Extends §10.
 14. **Authorized-user / joint handling** (§17.3) — confirmed: exclude AU/joint accounts from paydown suggestions. Decide whether to *surface* them as informational ("this AU card hurts your utilization — ask the primary holder").
 15. **Identity source when there's no form** (§4.2) — is the analyzer embedded behind a **known GHL contact** (pass email/phone silently → preferred), or a **fully public** embed (single email field, or IP/global-cap-only gate)? **Client to confirm the GHL setup.** Locked: keep a one-click consent affirmation (not a form).
 16. **PDF identity extraction as verification only?** (§4.2) — extract name/address from the PDF to confirm the report matches the known contact / enrich GHL? (Recommended optional; never the gate key.)
+17. **⚠️ REVISIT — OpenRouter compliance (DEFERRED by client).** Client deprioritized compliance for now ("as long as it's working"), so we're using OpenRouter without the safeguards. **Before launching on REAL consumer-credit PII**, this MUST be revisited with counsel (§9): OpenRouter is a third-party subprocessor in the data path → need a signed **DPA**, request-level **ZDR** on every call, **training opt-out**, **prompt-logging OFF** (never enable the 1% discount), and a **pinned downstream provider** with acceptable retention/training terms. Until then, use **redacted/synthetic reports only**. This is deferred **debt**, not a resolved issue.
 
 ---
 
