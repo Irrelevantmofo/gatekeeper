@@ -293,6 +293,94 @@ export function buildSuggestedScenarios(input: SimInput, maxN = 5): SuggestedSce
     .map(({ _avg, ...s }) => s)
 }
 
+// ── "Quickest path to <target>" optimizer (client request) ────────────────────
+// Greedily picks which cards to pay down FIRST (best points-per-dollar), stops
+// once the target score is reached, and returns a runnable scenario. Honest when
+// paydowns alone can't reach the target (delinquency/age are time-based, §17.3).
+export interface BestPathStep {
+  order: number
+  accountId: string
+  creditor: string
+  action: string
+  payDownAmount: number
+  pointsGained: number // marginal avg points this step adds
+  scoreAfter: number // avg score after this + prior steps
+}
+export interface BestPathResult {
+  target: number
+  reachable: boolean
+  baseScore: number // avg current
+  projectedScore: number // avg after the whole path
+  totalPayDown: number
+  steps: BestPathStep[]
+  scenario: { payDown: { accountId: string; targetUtilizationPct: number }[] } // runnable via /api/simulate
+  projected: SimBureauResult[]
+  note: string | null
+  disclaimer: string
+}
+
+const SCORE_TIERS = [660, 700, 740, 780, 800, 850]
+const avgScore = (res: SimResult) =>
+  res.perBureau.length ? res.perBureau.reduce((s, r) => s + r.estimatedScore, 0) / res.perBureau.length : 0
+
+export function buildBestPath(input: SimInput, target?: number): BestPathResult {
+  const base = avgScore(simulate(input, {}))
+  // Default target: the next tier above the current score (850 if already high).
+  const tgt = target ?? SCORE_TIERS.find((t) => t > base) ?? 850
+
+  const remaining = input.accounts.filter((a) => a.actionable && paydownToTarget(a)).map((a) => a.accountId)
+  const chosen: { accountId: string; targetUtilizationPct: number }[] = []
+  const steps: BestPathStep[] = []
+  let prevAvg = base
+
+  // Greedy: each round, add the card with the best marginal points-per-dollar.
+  while (remaining.length && prevAvg < tgt) {
+    let best: { id: string; avgAfter: number; points: number; cost: number; ppd: number } | null = null
+    for (const id of remaining) {
+      const res = simulate(input, { payDown: [...chosen, { accountId: id, targetUtilizationPct: TARGET_UTIL }] })
+      const avgAfter = avgScore(res)
+      const points = avgAfter - prevAvg
+      const cost = paydownToTarget(input.accounts.find((a) => a.accountId === id)!)?.amount ?? 0
+      const ppd = points / Math.max(cost, 1)
+      if (points > 0 && (!best || ppd > best.ppd)) best = { id, avgAfter, points, cost, ppd }
+    }
+    if (!best) break // no remaining card adds points
+    const acct = input.accounts.find((a) => a.accountId === best.id)!
+    chosen.push({ accountId: best.id, targetUtilizationPct: TARGET_UTIL })
+    remaining.splice(remaining.indexOf(best.id), 1)
+    steps.push({
+      order: steps.length + 1,
+      accountId: best.id,
+      creditor: acct.creditor,
+      action: "Pay under 10%",
+      payDownAmount: best.cost,
+      pointsGained: Math.round(best.points),
+      scoreAfter: Math.round(best.avgAfter),
+    })
+    prevAvg = best.avgAfter
+  }
+
+  const projectedRes = simulate(input, { payDown: chosen })
+  const projectedScore = Math.round(avgScore(projectedRes))
+  const reachable = projectedScore >= tgt
+  const note = reachable
+    ? null
+    : `Paying down your balances gets you to about ${projectedScore}. Reaching ${tgt} also depends on things that improve over time — like your payment history and the age of your accounts — which can't be paid down today.`
+
+  return {
+    target: tgt,
+    reachable,
+    baseScore: Math.round(base),
+    projectedScore,
+    totalPayDown: steps.reduce((s, x) => s + x.payDownAmount, 0),
+    steps,
+    scenario: { payDown: chosen },
+    projected: projectedRes.perBureau,
+    note,
+    disclaimer: DISCLAIMER,
+  }
+}
+
 // Full analysis object for the frontend (contract §8): the extracted facts
 // mapped by toAnalysis(), enriched with the curated suggested scenarios (§14).
 // Used by /api/analyze and /api/status so both return identical, complete data.

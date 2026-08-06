@@ -372,6 +372,43 @@ Your current panel shows **FICO** weights (35/30/15/10/10), but the score is **V
 
 (Backend source of truth: `VANTAGESCORE_3_WEIGHTS` in `lib/credit-simulator.ts`.)
 
+### 9.3 "Quickest Path to <target>" button
+
+`POST /api/best-path` — one click computes the smartest order of paydowns to reach a target score, and returns a **runnable scenario** you apply to the simulator (auto-moving the components).
+
+**Request**
+```jsonc
+{ "reportId": "r_71c4...", "target": 700 }   // target optional; omit to auto-pick the next tier
+```
+> Pick the button's target from the current score: e.g. label it **"Show Quickest Path to 850"** when the score is already high, **"...to 700"** otherwise. Pass that number as `target`. Omit `target` and the backend auto-selects the next tier (660/700/740/780/800/850).
+
+**Response**
+```jsonc
+{
+  "reportId": "r_71c4...",
+  "target": 700,
+  "reachable": true,
+  "baseScore": 643,
+  "projectedScore": 704,
+  "totalPayDown": 8100,
+  "steps": [                                  // ordered — "pay this FIRST"
+    { "order": 1, "accountId": "acct_2_capital-one", "creditor": "CAPITAL ONE",
+      "action": "Pay under 10%", "payDownAmount": 3990, "pointsGained": 34, "scoreAfter": 677 },
+    { "order": 2, "accountId": "acct_1_citi", "creditor": "CITI",
+      "action": "Pay under 10%", "payDownAmount": 4560, "pointsGained": 27, "scoreAfter": 704 }
+  ],
+  "scenario": { "payDown": [ { "accountId": "acct_2_capital-one", "targetUtilizationPct": 0.10 },
+                             { "accountId": "acct_1_citi", "targetUtilizationPct": 0.10 } ] },
+  "projected": [ { "bureau": "TransUnion", "baseScore": 646, "estimatedScore": 707, "estimatedRange": [700,714], "waterfall": [ ... ] }, ... ],
+  "note": null,
+  "disclaimer": "Estimated only — not a guarantee."
+}
+```
+Frontend behavior on click:
+- **Apply `scenario` to the UI** — select the matching "Pay under 10%" presets on the cards named in `steps`, and update the three gauges to `projected[].estimatedScore`. (You can also just re-POST `scenario` to `/api/simulate` — same result.)
+- **Render `steps` as an ordered checklist** ("1. Pay off CAPITAL ONE first (+34) → 677", "2. Then CITI (+27) → 704"), with `totalPayDown` as the cash needed.
+- **If `reachable: false`, show `note`** — paydowns alone won't reach the target (the rest needs time/payment history). Do NOT imply the target is guaranteed.
+
 ---
 
 ## 10. STEP 8 — Delete my analysis (optional but recommended)
