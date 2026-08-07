@@ -148,6 +148,26 @@ await fetch(uploadUrl, {
 
 ---
 
+## 5.5 STEP 3.5 — Pre-flight (page count + wrong-doc gate)
+
+`POST /api/precheck` — fast, **zero-AI**. Call this right after the upload PUT and before `/api/analyze`. It parses the PDF to (a) return the **page count** for the loading screen and (b) reject a wrong document before any AI spend.
+
+**Request** `{ "reportId": "..." }`
+
+**Response — looks like a credit report**
+```jsonc
+{ "ok": true, "reportId": "...", "pages": 34 }
+```
+→ Move to the loading screen showing e.g. **"Reading your 34-page report…"**, then call `/api/analyze`. (If `pages` is `null` — rare, e.g. an image-only PDF — just say "Reading your report…".)
+
+**Response — wrong document (HTTP 422)**
+```jsonc
+{ "ok": false, "reason": "not_a_credit_report", "message": "This doesn't look like a credit report…", "pages": 5 }
+```
+→ Show the friendly "that doesn't look like a credit report" screen and return to upload. **No AI was spent**, and the PDF was deleted.
+
+---
+
 ## 6. STEP 4 — Start analysis
 
 > ✅ **Now live (mock mode).** `/api/analyze` + `/api/status` are deployed. Until the backend sets an OpenAI key they return a **realistic MOCK** analysis (tri-bureau VantageScore sample) with `"mock": true` on the analyze response — so you can wire the loading screen and the 3-score display for real now, not against a stub. The shape is identical when real extraction turns on.

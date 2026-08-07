@@ -248,6 +248,16 @@ Deployed; drove all three endpoints via curl against prod (report `77836265`, re
 
 **Regression fixed (2026-08-07, found via Vercel logs):** live symptom — a CORRECT PDF returned the generic failure screen. Log: `[credit] analyze failed: Cannot perform Construct on a detached ArrayBuffer`. Cause: `unpdf`/pdf.js **detaches** the ArrayBuffer passed to it, so the pre-check left `bytes` detached and the subsequent `Buffer.from(bytes)` (extraction) threw. Not a frontend state issue. Fix: pre-check now parses a **copy** (`bytes.slice(0)`) so the caller's buffer stays intact. tsc clean; redeploy to apply.
 
+### 2026-08-07 — `/api/precheck` (page count for loading screen + early wrong-doc gate)
+
+**Ask:** show "Reading your N-page report…" during the (slow) analyze. Since analyze is synchronous, added a fast pre-flight endpoint.
+
+**Changed:**
+- **`app/api/precheck/route.ts`** (new) — `POST { reportId }` → downloads PDF, runs the zero-AI `unpdf` precheck → `{ ok:true, pages }` (200) or `{ ok:false, reason:"not_a_credit_report", message, pages }` (422, deletes PDF + marks failed). Returns page count even when precheck is disabled (only the rejection is gated by `CREDIT_PRECHECK`).
+- Frontend contract §5.5 added (call after PUT, before analyze; loading copy uses `pages`).
+
+**Flow now:** consent → upload-url → PUT → **precheck (get pages / reject wrong docs)** → analyze. analyze keeps its own precheck as a safety net (double parse of a good doc is ~sub-second vs the ~30–40s AI call). tsc clean. ⏳ deploy + validate.
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.
