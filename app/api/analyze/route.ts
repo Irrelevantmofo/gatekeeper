@@ -15,7 +15,7 @@ import { buildAnalysis } from "@/lib/credit-simulator"
 // call automatically once the key is set. See lib/credit.ts useMockExtraction().
 
 export const runtime = "nodejs"
-export const maxDuration = 60 // AI extraction on a multi-page PDF can take tens of seconds (plan §5)
+export const maxDuration = 300 // AI extraction can take ~40–55s; headroom prevents 504 (clamped to plan max)
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: corsHeaders(request) })

@@ -269,6 +269,8 @@ Deployed; drove all three endpoints via curl against prod (report `77836265`, re
 
 **Verified:** tsc clean. ⏳ Deploy + validate: re-time a real run and confirm output tokens dropped, open-account detail intact, closed accounts terse. If the compact-closed prompt ever regresses extraction, revert that one prompt line.
 
+**504 REGRESSION (found via Vercel logs):** after deploying, `/api/analyze` returned **504 "Task timed out after 60 seconds"** (flow: consent✓ upload-url✓ precheck✓ → analyze 504 → simulate 404). Cause: `reasoning:{effort:"low"}` made GPT-5.6 reason MORE than its default (baseline had no param, 457 reasoning tok) → pushed past the 60s `maxDuration`. **Fix:** reasoning is now **opt-in/off by default** (set `LLM_REASONING_EFFORT=minimal` to experiment later, no redeploy); `maxDuration` raised 60→**300** (Vercel clamps to plan max, harmless if lower). Compact-output + no-double-parse retained. tsc clean; redeploy.
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.

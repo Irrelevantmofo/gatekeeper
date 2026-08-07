@@ -23,9 +23,12 @@ import { getExtractionModel, getLlmProvider, getProviderApiKey, type LlmProvider
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-// Extraction is transcription, not reasoning — keep reasoning low for speed
-// (no accuracy cost). Override via LLM_REASONING_EFFORT if ever needed.
-const REASONING_EFFORT = process.env.LLM_REASONING_EFFORT || "low"
+// Reasoning effort is OPT-IN and OFF by default. Setting it to "low" once made
+// GPT-5.6 reason MORE than its default and pushed /api/analyze past 60s (504).
+// Leave unset to use the provider default (the known-good ~51s baseline); set
+// LLM_REASONING_EFFORT=minimal to experiment with a faster tier — no redeploy.
+const REASONING_EFFORT = process.env.LLM_REASONING_EFFORT || ""
+const reasoningField = REASONING_EFFORT ? { reasoning: { effort: REASONING_EFFORT } } : {}
 
 export class ExtractionError extends Error {}
 
@@ -61,7 +64,7 @@ async function callOpenAI(model: string, apiKey: string, pdfBase64: string, file
       },
     ],
     text: { format: { type: "json_schema", name: "credit_report_extraction", strict: true, schema: EXTRACTION_JSON_SCHEMA } },
-    reasoning: { effort: REASONING_EFFORT },
+    ...reasoningField,
   }
   const res = await fetch(OPENAI_RESPONSES_URL, {
     method: "POST",
@@ -95,7 +98,7 @@ async function callOpenRouter(model: string, apiKey: string, pdfBase64: string, 
       },
     ],
     response_format: { type: "json_schema", json_schema: { name: "credit_report_extraction", strict: true, schema: EXTRACTION_JSON_SCHEMA } },
-    reasoning: { effort: REASONING_EFFORT },
+    ...reasoningField,
     // For models without native PDF vision, OpenRouter can parse via a plugin:
     //   plugins: [{ id: "file-parser", pdf: { engine: "native" } }]
     // To enable ZDR/no-retention later (see header note): provider.data_collection = "deny".
