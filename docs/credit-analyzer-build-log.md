@@ -246,6 +246,8 @@ Deployed; drove all three endpoints via curl against prod (report `77836265`, re
 
 **Verified:** `tsc` clean; overrides intact in lockfile. ⏳ Deploy + validate (upload a non-credit PDF → expect 422, no OpenRouter cost; real report still passes).
 
+**Regression fixed (2026-08-07, found via Vercel logs):** live symptom — a CORRECT PDF returned the generic failure screen. Log: `[credit] analyze failed: Cannot perform Construct on a detached ArrayBuffer`. Cause: `unpdf`/pdf.js **detaches** the ArrayBuffer passed to it, so the pre-check left `bytes` detached and the subsequent `Buffer.from(bytes)` (extraction) threw. Not a frontend state issue. Fix: pre-check now parses a **copy** (`bytes.slice(0)`) so the caller's buffer stays intact. tsc clean; redeploy to apply.
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.

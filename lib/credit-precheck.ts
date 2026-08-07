@@ -30,7 +30,10 @@ export async function precheckCreditReport(bytes: ArrayBuffer, maxPages: number)
   let text = ""
   let pages = 0
   try {
-    const pdf = await getDocumentProxy(new Uint8Array(bytes))
+    // pdf.js DETACHES the ArrayBuffer it's given (transfers it to its worker),
+    // which would break the caller's later Buffer.from(bytes) for extraction.
+    // Parse a COPY so the caller's buffer stays intact.
+    const pdf = await getDocumentProxy(new Uint8Array(bytes.slice(0)))
     const res = await extractText(pdf, { mergePages: true })
     pages = res.totalPages
     const t = res.text as unknown // string with mergePages:true; be defensive anyway
