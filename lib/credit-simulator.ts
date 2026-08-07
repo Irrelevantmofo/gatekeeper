@@ -364,9 +364,19 @@ export function buildBestPath(input: SimInput, target?: number): BestPathResult 
   const projectedRes = simulate(input, { payDown: chosen })
   const projectedScore = Math.round(avgScore(projectedRes))
   const reachable = projectedScore >= tgt
-  const note = reachable
-    ? null
-    : `Paying down your balances gets you to about ${projectedScore}. Reaching ${tgt} also depends on things that improve over time — like your payment history and the age of your accounts — which can't be paid down today.`
+
+  // Honest messaging across all outcomes, incl. the low-score edges:
+  let note: string | null = null
+  if (reachable && steps.length === 0) {
+    // Already at/above the target — nothing to do.
+    note = `Good news — your score is already at or above ${tgt}.`
+  } else if (!reachable && steps.length === 0) {
+    // Too low AND no balances to pay down: the drag is time-based, not payable.
+    note = `There aren't any balances you can pay down to reach ${tgt} right now. Your score is mainly held back by factors that improve over time — like your payment history and the age of your accounts.`
+  } else if (!reachable) {
+    // Paid down everything possible but still short of the target.
+    note = `Paying down your balances gets you to about ${projectedScore}. Reaching ${tgt} also depends on things that improve over time — like your payment history and the age of your accounts — which can't be paid down today.`
+  }
 
   return {
     target: tgt,

@@ -258,7 +258,10 @@ Deployed; drove all three endpoints via curl against prod (report `77836265`, re
 
 **Flow now:** consent → upload-url → PUT → **precheck (get pages / reject wrong docs)** → analyze. analyze keeps its own precheck as a safety net (double parse of a good doc is ~sub-second vs the ~30–40s AI call). tsc clean. ⏳ deploy + validate.
 
-### 2026-08-07 — `/api/analyze` latency reduction (~51s → target ~30s)
+### 2026-08-07 — `/api/analyze` latency reduction ✅ (51s → 35s live)
+
+**Result:** confirmed **~35s** in production (was ~51s) — a 31% cut, from compact closed-account output + removing the redundant PDF parse (reasoning param left at default). No accuracy loss reported.
+
 
 **Cause:** analyze time is dominated by LLM **output** generation — the sample report has **37 accounts** → ~5k output tokens, decoded serially. Input/download/DB are ~2–4s. Reasoning was already tiny (457 tok).
 
@@ -270,6 +273,14 @@ Deployed; drove all three endpoints via curl against prod (report `77836265`, re
 **Verified:** tsc clean. ⏳ Deploy + validate: re-time a real run and confirm output tokens dropped, open-account detail intact, closed accounts terse. If the compact-closed prompt ever regresses extraction, revert that one prompt line.
 
 **504 REGRESSION (found via Vercel logs):** after deploying, `/api/analyze` returned **504 "Task timed out after 60 seconds"** (flow: consent✓ upload-url✓ precheck✓ → analyze 504 → simulate 404). Cause: `reasoning:{effort:"low"}` made GPT-5.6 reason MORE than its default (baseline had no param, 457 reasoning tok) → pushed past the 60s `maxDuration`. **Fix:** reasoning is now **opt-in/off by default** (set `LLM_REASONING_EFFORT=minimal` to experiment later, no redeploy); `maxDuration` raised 60→**300** (Vercel clamps to plan max, harmless if lower). Compact-output + no-double-parse retained. tsc clean; redeploy.
+
+### 2026-08-07 — best-path: honest messaging for unreachable / low-score cases
+
+`buildBestPath` only uses paydowns (time-based factors can't be "paid off"), so a target may be unreachable. Behavior: pays down all actionable cards, returns `reachable:false` + `projectedScore` = realistic max + a `note` explaining the gap needs time. Tightened the `note` to cover three cases cleanly: already-at-target (steps=0, reachable), too-low-with-no-payable-balances (steps=0, not reachable), and paid-everything-still-short (steps>0). Never fabricates hitting the target. tsc clean.
+
+### 2026-08-07 — Mock profile switch (`CREDIT_MOCK_PROFILE=low`)
+
+Added a low-score mock profile for testing the unreachable-target UI. `CREDIT_MOCK_PROFILE=low` → scores ~548/543/539 (Poor) with the same near-maxed cards, so best-path (target 700) pays down all cards but lands ~650 → `reachable:false` + steps + honest note. Unset/"standard" keeps the ~640s Fair profile (reaches 700). Mock-mode only. tsc clean.
 
 ---
 

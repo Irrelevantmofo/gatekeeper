@@ -186,27 +186,38 @@ export function buildMockExtraction(): RawExtraction {
       past_due: 0,
     }))
 
+  // Set CREDIT_MOCK_PROFILE=low to test the "can't reach the target" flow: low
+  // scores + the same near-maxed cards → best-path produces real paydown steps
+  // but still lands short of 700 (reachable:false + honest note).
+  const low = process.env.CREDIT_MOCK_PROFILE === "low"
+
   return {
     report_meta: {
-      vendor: "MOCK (no OpenAI key set)",
+      vendor: low ? "MOCK (low-score profile)" : "MOCK (no OpenAI key set)",
       report_type: "3B",
       report_date: "2026-07-14",
       score_model: "VantageScore 3.0",
       scale: [300, 850],
     },
-    scores: [
-      {
-        bureau: "TransUnion",
-        value: 646,
-        band: "Fair",
-        reason_codes: [
-          "You have too many delinquent or derogatory accounts",
-          "Balances on revolving accounts are too high compared to credit limits",
+    scores: low
+      ? [
+          { bureau: "TransUnion", value: 548, band: "Poor", reason_codes: ["Several accounts have missed or late payments", "Balances on revolving accounts are too high compared to credit limits"] },
+          { bureau: "Experian", value: 543, band: "Poor", reason_codes: ["Too many of the delinquencies on your accounts are recent", "You have a public record or collection"] },
+          { bureau: "Equifax", value: 539, band: "Poor", reason_codes: ["The balances on your accounts are too high compared to loan amounts"] },
+        ]
+      : [
+          {
+            bureau: "TransUnion",
+            value: 646,
+            band: "Fair",
+            reason_codes: [
+              "You have too many delinquent or derogatory accounts",
+              "Balances on revolving accounts are too high compared to credit limits",
+            ],
+          },
+          { bureau: "Experian", value: 643, band: "Fair", reason_codes: ["Too many of the delinquencies on your accounts are recent"] },
+          { bureau: "Equifax", value: 639, band: "Fair", reason_codes: ["The balances on your accounts are too high compared to loan amounts"] },
         ],
-      },
-      { bureau: "Experian", value: 643, band: "Fair", reason_codes: ["Too many of the delinquencies on your accounts are recent"] },
-      { bureau: "Equifax", value: 639, band: "Fair", reason_codes: ["The balances on your accounts are too high compared to loan amounts"] },
-    ],
     accounts: [
       { creditor: "CITI", type: "revolving", detail: "Credit Card", ownership: "individual", recent_late_marks: 0, per_bureau: per("open", 5104, 5440) },
       { creditor: "CAPITAL ONE", type: "revolving", detail: "Credit Card", ownership: "individual", recent_late_marks: 0, per_bureau: per("open", 4440, 4500) },
