@@ -258,6 +258,17 @@ Deployed; drove all three endpoints via curl against prod (report `77836265`, re
 
 **Flow now:** consent → upload-url → PUT → **precheck (get pages / reject wrong docs)** → analyze. analyze keeps its own precheck as a safety net (double parse of a good doc is ~sub-second vs the ~30–40s AI call). tsc clean. ⏳ deploy + validate.
 
+### 2026-08-07 — `/api/analyze` latency reduction (~51s → target ~30s)
+
+**Cause:** analyze time is dominated by LLM **output** generation — the sample report has **37 accounts** → ~5k output tokens, decoded serially. Input/download/DB are ~2–4s. Reasoning was already tiny (457 tok).
+
+**Changes (accuracy-safe):**
+1. **Compact closed accounts** (`credit-extraction.ts` prompt) — open accounts keep full per-bureau detail; accounts closed/paid/transferred on all bureaus emit ONE terse per_bureau entry (nulls). ~29 of 37 accounts shrink → big output-token cut. Simulator only uses open revolving + scores + reason codes, so no accuracy loss for what the tool computes; "Other Accounts" list still present.
+2. **Reasoning effort → `low`** (`llm-extract.ts`, both providers; `LLM_REASONING_EFFORT` override).
+3. **Removed the redundant PDF parse in `/api/analyze`** — the wrong-doc gate + page count now live solely in `/api/precheck` (frontend calls it first). Saves ~1–3s; `isValid` remains the empty-extraction backstop.
+
+**Verified:** tsc clean. ⏳ Deploy + validate: re-time a real run and confirm output tokens dropped, open-account detail intact, closed accounts terse. If the compact-closed prompt ever regresses extraction, revert that one prompt line.
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.

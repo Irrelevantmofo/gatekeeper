@@ -23,6 +23,10 @@ import { getExtractionModel, getLlmProvider, getProviderApiKey, type LlmProvider
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+// Extraction is transcription, not reasoning — keep reasoning low for speed
+// (no accuracy cost). Override via LLM_REASONING_EFFORT if ever needed.
+const REASONING_EFFORT = process.env.LLM_REASONING_EFFORT || "low"
+
 export class ExtractionError extends Error {}
 
 interface CallResult {
@@ -57,6 +61,7 @@ async function callOpenAI(model: string, apiKey: string, pdfBase64: string, file
       },
     ],
     text: { format: { type: "json_schema", name: "credit_report_extraction", strict: true, schema: EXTRACTION_JSON_SCHEMA } },
+    reasoning: { effort: REASONING_EFFORT },
   }
   const res = await fetch(OPENAI_RESPONSES_URL, {
     method: "POST",
@@ -90,6 +95,7 @@ async function callOpenRouter(model: string, apiKey: string, pdfBase64: string, 
       },
     ],
     response_format: { type: "json_schema", json_schema: { name: "credit_report_extraction", strict: true, schema: EXTRACTION_JSON_SCHEMA } },
+    reasoning: { effort: REASONING_EFFORT },
     // For models without native PDF vision, OpenRouter can parse via a plugin:
     //   plugins: [{ id: "file-parser", pdf: { engine: "native" } }]
     // To enable ZDR/no-retention later (see header note): provider.data_collection = "deny".

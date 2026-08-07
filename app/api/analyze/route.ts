@@ -1,9 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders } from "@/lib/ghl"
 import { CREDIT_REPORTS_BUCKET, getSupabaseAdmin } from "@/lib/supabase"
-import { getMaxPages, isPrecheckEnabled, REPORT_STATUS, useMockExtraction } from "@/lib/credit"
+import { REPORT_STATUS, useMockExtraction } from "@/lib/credit"
 import { buildMockExtraction, type RawExtraction } from "@/lib/credit-extraction"
-import { precheckCreditReport } from "@/lib/credit-precheck"
 import { extractReportFacts } from "@/lib/llm-extract"
 import { buildAnalysis } from "@/lib/credit-simulator"
 
@@ -75,19 +74,10 @@ export async function POST(request: NextRequest) {
     }
     const bytes = blob ? await blob.arrayBuffer() : null
 
-    // WRONG-DOCUMENT PRE-CHECK (zero AI cost) — reject non-credit-report PDFs
-    // BEFORE spending extraction tokens (plan §7 cost control).
-    if (bytes && isPrecheckEnabled()) {
-      const pre = await precheckCreditReport(bytes, getMaxPages())
-      if (!pre.ok) {
-        await supabase.storage.from(CREDIT_REPORTS_BUCKET).remove([report.storage_path])
-        await supabase
-          .from("reports")
-          .update({ status: REPORT_STATUS.failed, error: pre.reason?.slice(0, 500), pdf_deleted_at: new Date().toISOString(), storage_path: null })
-          .eq("id", reportId)
-        return NextResponse.json({ status: "failed", reason: "not_a_credit_report", error: pre.reason }, { status: 422, headers: cors })
-      }
-    }
+    // NOTE: the wrong-document gate + page count now live in POST /api/precheck,
+    // which the frontend calls right before this. We intentionally do NOT re-parse
+    // the PDF here (that was ~1–3s of duplicated work). The isValid backstop in
+    // llm-extract still fails loudly on an empty/garbage extraction.
 
     // Extract facts.
     let extracted: RawExtraction
