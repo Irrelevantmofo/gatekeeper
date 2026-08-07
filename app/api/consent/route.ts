@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders, getGHLConfig, normalizeEmail, normalizePhone, searchContact } from "@/lib/ghl"
 import { getSupabaseAdmin } from "@/lib/supabase"
 import { getCreditUsedTag, isGateEnforced, parseClientIp } from "@/lib/credit"
+import { isOtpRequired, normalizeUsPhone, verifyVerificationToken } from "@/lib/otp"
 
 // POST /api/consent — records a consent event and runs the one-use gate.
 //
@@ -33,7 +34,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  let body: { email?: string; phone?: string; contactId?: string; consentVersion?: string }
+  let body: { email?: string; phone?: string; contactId?: string; consentVersion?: string; verificationToken?: string }
   try {
     body = await request.json()
   } catch {
@@ -44,6 +45,15 @@ export async function POST(request: NextRequest) {
   const phone = body.phone ? normalizePhone(body.phone) : ""
   const consentVersion = body.consentVersion?.trim() || "unversioned"
   const contactRef = body.contactId?.trim() || email || phone || null
+
+  // ── 0. Require a verified phone when OTP is enforced (plan: otp-access-plan.md).
+  //    Off by default (OTP_REQUIRED unset) so the current flow is unaffected.
+  if (isOtpRequired()) {
+    const e164 = normalizeUsPhone(body.phone ?? "")
+    if (!e164 || !verifyVerificationToken(body.verificationToken, e164)) {
+      return NextResponse.json({ status: "phone_unverified", error: "Please verify your phone number first." }, { status: 401, headers: cors })
+    }
+  }
 
   // ── 1. Gate check (best-effort; never throws the request) ──────────────────
   const enforced = isGateEnforced()

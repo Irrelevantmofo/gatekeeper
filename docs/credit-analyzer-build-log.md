@@ -282,6 +282,21 @@ Deployed; drove all three endpoints via curl against prod (report `77836265`, re
 
 Added a low-score mock profile for testing the unreachable-target UI. `CREDIT_MOCK_PROFILE=low` → scores ~548/543/539 (Poor) with the same near-maxed cards, so best-path (target 700) pays down all cards but lands ~650 → `reachable:false` + steps + honest note. Unset/"standard" keeps the ~640s Fair profile (reaches 700). Mock-mode only. tsc clean.
 
+### 2026-08-08 — Phone-OTP access gate via Telnyx Verify (+ dev bypass)
+
+Client chose **Telnyx Verify** for phone verification (purpose-built OTP; cheaper/higher-throughput than GHL's Twilio SMS) with **GHL** as CRM/follow-up. Telnyx manages codes → **no Supabase OTP table needed**. Plan: `docs/otp-access-plan.md`.
+
+**Built (all additive):**
+- **`lib/otp.ts`** — config, US-phone normalize, isolated Telnyx Verify calls (`telnyxSendCode`/`telnyxCheckCode`, verify against docs), HMAC-signed stateless `verificationToken` (sign/verify), coarse rate limiter (reuses `rate_limits` table), and **dev bypass**.
+- **`app/api/otp/request`** — upsert GHL contact (lead capture, best-effort) → rate-limit (per-phone/IP/global) → send code via Telnyx, or skip in bypass.
+- **`app/api/otp/verify`** — check code (Telnyx, or fixed `OTP_BYPASS_CODE` in bypass) → re-entry block (credit-analyzer-used tag, when `CREDIT_GATE_ENFORCED`) → issue `verificationToken`.
+- **`/api/consent`** — requires a valid `verificationToken` **only when `OTP_REQUIRED=on`** (off by default → current flow unaffected).
+- `.env.example` — Telnyx + OTP vars.
+
+**Dev bypass:** `OTP_BYPASS=on` + `OTP_REQUIRED=off` → full phone→code→unlock flow with code `000000`, no US number, no Telnyx, no SMS cost.
+
+**Verified:** `tsc` clean; BAT untouched. ⏳ Deploy + validate (bypass path via curl; real Telnyx once `TELNYX_*` set + 10DLC/toll-free registered).
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.
