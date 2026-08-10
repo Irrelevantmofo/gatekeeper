@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders, getGHLConfig, normalizePhone, upsertContact } from "@/lib/ghl"
 import { getSupabaseAdmin } from "@/lib/supabase"
-import { parseClientIp } from "@/lib/credit"
+import { CREDIT_CONTACT_SOURCE, parseClientIp } from "@/lib/credit"
 import { dayStamp, getResendCooldownSec, getTelnyxConfig, isOtpBypass, normalizeUsPhone, otpRateLimitOk, telnyxSendCode } from "@/lib/otp"
 
 // POST /api/otp/request — send a phone verification code (plan: docs/otp-access-plan.md).
@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
   if (ghl) {
     try {
       await upsertContact(
-        { phone: normalizePhone(phone), firstName: body.firstName?.trim(), lastName: body.lastName?.trim() },
+        { phone: normalizePhone(phone), firstName: body.firstName?.trim(), lastName: body.lastName?.trim(), source: CREDIT_CONTACT_SOURCE },
         ghl.token,
         ghl.locationId,
       )

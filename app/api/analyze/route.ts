@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { corsHeaders, getGHLConfig, resolveContactCustomFields, upsertContact } from "@/lib/ghl"
+import { corsHeaders, getGHLConfig, resolveContactCustomFields, type ResolvedCustomField, upsertContact } from "@/lib/ghl"
 import { CREDIT_REPORTS_BUCKET, getSupabaseAdmin } from "@/lib/supabase"
-import { applyCreditUsedTag, isCrmSyncEnabled, REPORT_STATUS, useMockExtraction } from "@/lib/credit"
+import { applyCreditUsedTag, CREDIT_CONTACT_SOURCE, isCrmSyncEnabled, REPORT_STATUS, useMockExtraction } from "@/lib/credit"
 import { normalizeUsPhone } from "@/lib/otp"
 import { buildMockExtraction, type RawExtraction } from "@/lib/credit-extraction"
 import { extractReportFacts } from "@/lib/llm-extract"
@@ -135,7 +135,20 @@ export async function POST(request: NextRequest) {
         try {
           const bestPath = buildBestPath(analysis, 700)
           const payload = buildCrmPayload(extracted, bestPath)
-          const { resolved, unresolved } = await resolveContactCustomFields(payload.custom, ghl.token, ghl.locationId)
+
+          // Custom-field mapping needs the "view custom fields" token scope. If the
+          // token lacks it (401), still write the standard fields + tag — the custom
+          // fields will populate once the scope is added. So this is best-effort.
+          let resolved: ResolvedCustomField[] = []
+          let unresolved: string[] = []
+          try {
+            const r = await resolveContactCustomFields(payload.custom, ghl.token, ghl.locationId)
+            resolved = r.resolved
+            unresolved = r.unresolved
+          } catch (e) {
+            console.log("[credit] custom-field resolve failed (writing name+tag only):", e instanceof Error ? e.message : e)
+          }
+
           const ref = report.contact_ref as string
           const isEmail = ref.includes("@")
           // Normalize the phone to E.164 so this upsert lands on the SAME contact
@@ -146,6 +159,7 @@ export async function POST(request: NextRequest) {
               phone: isEmail ? undefined : normalizeUsPhone(ref) ?? ref,
               firstName: payload.standard.firstName,
               lastName: payload.standard.lastName,
+              source: CREDIT_CONTACT_SOURCE,
               customFields: resolved,
             },
             ghl.token,

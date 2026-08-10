@@ -22,6 +22,7 @@ export interface UpsertContactInput {
   companyName?: string
   email?: string
   phone?: string
+  source?: string
   customFields?: ResolvedCustomField[]
 }
 
@@ -178,7 +179,8 @@ export async function upsertContact(
       companyName: input.companyName || undefined,
       email: input.email || undefined,
       phone: input.phone || undefined,
-      source: "Business Loan Analyzer",
+      // Per-call source; defaults to the BAT value so existing BAT behavior is unchanged.
+      source: input.source || "Business Loan Analyzer",
       customFields: input.customFields && input.customFields.length > 0 ? input.customFields : undefined,
     }),
     cache: "no-store",

@@ -12,6 +12,9 @@ export function getCreditUsedTag(): string {
   return (process.env.CREDIT_USED_TAG || "credit-analyzer-used").toLowerCase()
 }
 
+// GHL contact "source" for credit-analyzer leads (distinct from BAT's default).
+export const CREDIT_CONTACT_SOURCE = "IdentityIQ Credit Report Analyzer and Simulator"
+
 // Gate enforcement is OFF by default. While building/testing we want to run the
 // same contact through the flow repeatedly WITHOUT getting locked out, so the
 // gate only *observes* (reports what it would do) unless this is explicitly

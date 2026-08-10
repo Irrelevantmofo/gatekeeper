@@ -331,6 +331,16 @@ Implements `docs/crm-capture-plan.md`: on a **real** analysis, push scores/utili
 
 **Verified:** `tsc` clean. ⏳ Redeploy + re-test; delete the old/duplicate test contacts in GHL first to avoid confusion.
 
+### 2026-08-10 — Root cause: GHL token missing custom-fields scope (401)
+
+Log revealed it: `CRM sync failed: GHL get custom fields failed (401) "The token is not authorized for this scope."` — mapping custom fields calls `GET /locations/{id}/customFields`, which the GHL token lacks scope for. That call is FIRST in the CRM block, so it threw before the contact upsert + tag → name AND tag missing too (not just custom fields). (Contact upsert/tags use `contacts.write`, which the token has — hence phone captured, BAT fine.)
+
+**Fixes:**
+- **Code:** custom-field resolution is now **best-effort** (its own try/catch) — a missing scope no longer aborts the block, so **name + tag write regardless**; custom fields populate once the scope is added.
+- **Config (user):** add the **"View Custom Fields"** scope (`locations/customFields.readonly`) to the GHL private-integration token, then update `GHL_API_TOKEN` in Vercel.
+
+**Verified:** `tsc` clean. After redeploy + scope, the `[credit] CRM sync ok: contact=… fields=N unresolved=…` log confirms how many fields mapped (unresolved = not-yet-created / mis-named GHL fields).
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.
