@@ -58,6 +58,9 @@ export interface RawExtraction {
     score_model: string | null
     scale: number[]
   }
+  // Consumer name (the ONLY PII we extract) → GHL contact firstName/lastName.
+  consumer_first_name: string | null
+  consumer_last_name: string | null
   scores: ExtractedScore[]
   accounts: ExtractedAccount[]
   inquiries: ExtractedInquiry[]
@@ -70,7 +73,7 @@ export interface RawExtraction {
 export const EXTRACTION_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["report_meta", "scores", "accounts", "inquiries", "public_records"],
+  required: ["report_meta", "consumer_first_name", "consumer_last_name", "scores", "accounts", "inquiries", "public_records"],
   properties: {
     report_meta: {
       type: "object",
@@ -84,6 +87,8 @@ export const EXTRACTION_JSON_SCHEMA = {
         scale: { type: "array", items: { type: "number" } },
       },
     },
+    consumer_first_name: { type: ["string", "null"] },
+    consumer_last_name: { type: ["string", "null"] },
     scores: {
       type: "array",
       items: {
@@ -169,7 +174,8 @@ export const EXTRACTION_SYSTEM_PROMPT = [
   "CRITICAL — two DIFFERENT status fields per bureau, do not confuse them: account_status comes from the report's 'Account Status' row and is the OPEN/CLOSED state (normalize to exactly one of: open | closed | paid | transferred | derogatory | unknown; use 'unknown' if a bureau doesn't state it — never leave it blank). payment_status comes from the separate 'Payment Status' row and is the current standing (e.g. 'current', '30', '60', 'collection'; may be null). Both an open and a closed account can show payment_status 'Current' — never copy the payment status into account_status.",
   "If a value is absent on a given bureau, use null. If an account is missing on a bureau, omit that bureau from per_bureau.",
   "KEEP THE RESPONSE COMPACT for speed: if an account is OPEN on at least one bureau, include full per_bureau detail for every bureau it appears on. But if an account is CLOSED, PAID, or TRANSFERRED on ALL bureaus, include just ONE per_bureau entry (any single bureau) with account_status set and balance/credit_limit/past_due as null — full per-bureau detail is not needed for non-open accounts.",
-  "PRIVACY: do NOT extract or output SSN, date of birth, street addresses, employers, or full account numbers. Those are not needed.",
+  "Extract the consumer's first and last name from the Personal Information section into consumer_first_name / consumer_last_name (pick the primary current name; use null if unclear).",
+  "PRIVACY: the NAME is the only personal detail to extract. Do NOT extract or output SSN, date of birth, street addresses, employers, or full account numbers.",
 ].join("\n")
 
 // ── Mock extraction (used when OPENAI_API_KEY is absent or CREDIT_ANALYZE_MOCK) ─
@@ -199,6 +205,8 @@ export function buildMockExtraction(): RawExtraction {
       score_model: "VantageScore 3.0",
       scale: [300, 850],
     },
+    consumer_first_name: "Barbara",
+    consumer_last_name: "Sternberg",
     scores: low
       ? [
           { bureau: "TransUnion", value: 548, band: "Poor", reason_codes: ["Several accounts have missed or late payments", "Balances on revolving accounts are too high compared to credit limits"] },

@@ -297,6 +297,27 @@ Client chose **Telnyx Verify** for phone verification (purpose-built OTP; cheape
 
 **Verified:** `tsc` clean; BAT untouched. ⏳ Deploy + validate (bypass path via curl; real Telnyx once `TELNYX_*` set + 10DLC/toll-free registered).
 
+### 2026-08-08 — Scope decision (client transcript): simulator = paydowns only; deletions → booking
+
+Client (Sam Sky) confirmed the simulator does **not** model **deletions** (collections/negative items removed vs. paid) — only paydowns. Deletions are intentionally **out of scope for the tool** and routed to the strategist call. Frontend copy:
+- **Low-score asterisk:** if scores are too low the calc can't reach 700; state the ~120-point paydown cap (uses existing `best-path` `reachable:false` + `note`).
+- **Booking-CTA asterisk:** invite deletion questions — "…especially about getting accounts deleted and how much that could raise your score — book here."
+- ⚠️ **CROA flag:** "getting accounts deleted" positions the call as credit-repair; keep the vendor from *promising* deletions in copy (compliance deferred, but flagged). No backend change — deletion modeling deliberately not built.
+
+### 2026-08-08 — CRM sync: analysis fields → GHL contact (safe, no-blanks)
+
+Implements `docs/crm-capture-plan.md`: on a **real** analysis, push scores/utilization/risk/simulator fields to the GHL contact (custom fields) + name to native First/Last + the `credit-analyzer-used` tag.
+
+**Built (additive):**
+- **Extraction:** added nullable `consumer_first_name` / `consumer_last_name` to the schema + prompt + mock (name is the ONLY PII extracted; SSN/DOB/address/employers still excluded). Nullable *plain strings* (safe pattern — not the enum that broke before).
+- **`lib/crm-mapping.ts`** (new) — `buildCrmPayload(raw, bestPath)` → `{ standard:{firstName,lastName}, custom:{...} }`. **Only valid values included** — a `put()` helper drops null/NaN/empty/whitespace, so no blank/garbage field is ever sent (no overwriting good CRM data). Derives middle score, band, funding tier, utilization/balances/counts (on the representative bureau), risk counts, and maps simulator outcomes from `buildBestPath(…, 700)`.
+- **`/api/analyze`** — after `buildAnalysis`, if **`!mock` && `CREDIT_CRM_SYNC!=off` && GHL configured && contact_ref**: resolve custom fields (`resolveContactCustomFields`) → `upsertContact` (standard + custom) → `applyCreditUsedTag`. **Best-effort try/catch — a GHL failure never fails the analysis.**
+- `lib/credit.ts` `isCrmSyncEnabled()`; `.env.example` `CREDIT_CRM_SYNC=on`.
+
+**Safety:** mock mode writes NOTHING to GHL (no CRM pollution during frontend testing). If the GHL custom fields don't exist yet, `resolveContactCustomFields` just leaves them unresolved (logged) — no crash; they populate once created.
+
+**Verified:** `tsc` clean; BAT untouched. ⏳ Needs: create the custom fields in GHL, then a **real** analysis re-validation run (confirm the new name fields extract cleanly AND scores/accounts still come back full — schema changed).
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.

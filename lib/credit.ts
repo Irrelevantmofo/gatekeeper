@@ -77,6 +77,13 @@ export function isPrecheckEnabled(): boolean {
   return process.env.CREDIT_PRECHECK !== "off"
 }
 
+// Push analysis fields + used-tag into GHL on a real analysis, unless disabled.
+// NOTE: callers must ALSO skip this in mock mode so test runs never write fake
+// data to the real CRM.
+export function isCrmSyncEnabled(): boolean {
+  return process.env.CREDIT_CRM_SYNC !== "off"
+}
+
 // Max PDF pages accepted for analysis — a cost/abuse ceiling. Default 60 (real
 // tri-bureau reports run 20–40 pages).
 export function getMaxPages(): number {

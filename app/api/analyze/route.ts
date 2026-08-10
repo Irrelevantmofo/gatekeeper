@@ -1,10 +1,11 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { corsHeaders } from "@/lib/ghl"
+import { corsHeaders, getGHLConfig, resolveContactCustomFields, upsertContact } from "@/lib/ghl"
 import { CREDIT_REPORTS_BUCKET, getSupabaseAdmin } from "@/lib/supabase"
-import { REPORT_STATUS, useMockExtraction } from "@/lib/credit"
+import { applyCreditUsedTag, isCrmSyncEnabled, REPORT_STATUS, useMockExtraction } from "@/lib/credit"
 import { buildMockExtraction, type RawExtraction } from "@/lib/credit-extraction"
 import { extractReportFacts } from "@/lib/llm-extract"
-import { buildAnalysis } from "@/lib/credit-simulator"
+import { buildAnalysis, buildBestPath } from "@/lib/credit-simulator"
+import { buildCrmPayload } from "@/lib/crm-mapping"
 
 // POST /api/analyze — extract structured facts from the uploaded PDF, persist
 // them, delete the PDF, and return the analysis (plan §4 steps 4–7).
@@ -47,7 +48,7 @@ export async function POST(request: NextRequest) {
   // Load the report row.
   const { data: report, error: reportErr } = await supabase
     .from("reports")
-    .select("id, status, storage_path")
+    .select("id, status, storage_path, contact_ref")
     .eq("id", reportId)
     .single()
 
@@ -121,10 +122,37 @@ export async function POST(request: NextRequest) {
     // in production once CREDIT_GATE_ENFORCED=true. See lib/credit.applyCreditUsedTag.
 
     const maxN = Number.parseInt(process.env.RECOMMENDATIONS_MAX_N || "5", 10) || 5
-    return NextResponse.json(
-      { status: "analyzed", mock, analysis: buildAnalysis(reportId, extracted, maxN) },
-      { status: 200, headers: cors },
-    )
+    const analysis = buildAnalysis(reportId, extracted, maxN)
+
+    // ── CRM sync → GHL (REAL analysis only; never in mock, so test runs can't
+    //    pollute the CRM). Best-effort: a GHL failure must not fail the analysis.
+    if (!mock && isCrmSyncEnabled() && report.contact_ref) {
+      const ghl = getGHLConfig()
+      if (ghl) {
+        try {
+          const bestPath = buildBestPath(analysis, 700)
+          const payload = buildCrmPayload(extracted, bestPath)
+          const { resolved } = await resolveContactCustomFields(payload.custom, ghl.token, ghl.locationId)
+          const ref = report.contact_ref as string
+          const contact = await upsertContact(
+            {
+              email: ref.includes("@") ? ref : undefined,
+              phone: ref.includes("@") ? undefined : ref,
+              firstName: payload.standard.firstName,
+              lastName: payload.standard.lastName,
+              customFields: resolved,
+            },
+            ghl.token,
+            ghl.locationId,
+          )
+          await applyCreditUsedTag(contact.id, ghl.token) // re-entry block tag (plan §3.5)
+        } catch (err) {
+          console.log("[credit] CRM sync failed (non-fatal):", err instanceof Error ? err.message : err)
+        }
+      }
+    }
+
+    return NextResponse.json({ status: "analyzed", mock, analysis }, { status: 200, headers: cors })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.log("[credit] analyze failed:", message)
