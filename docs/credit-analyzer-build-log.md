@@ -357,6 +357,10 @@ Client has A2P 10DLC on GHL → deliver OTP through **GHL Conversations API** in
 
 To keep OTP SMS out of the main inbox: apply a distinct **`credit-simulator`** tag (env `CREDIT_LEAD_TAG`) to the contact at `/api/otp/request` (both bypass + real paths), so all credit-tool threads can be filtered into their own GHL **Conversation View**. `lib/credit.ts` refactored to a generic `addContactTag()` with `applyCreditUsedTag`/`applyCreditLeadTag` wrappers. Best-effort — never blocks the OTP send. `.env.example` updated. tsc clean.
 
+### 2026-08-11 — OTP send: surface GHL "DND active" distinctly
+
+"We couldn't send your code" on a repeat number was **GHL DND**: `400 CONVERSATIONS_MSG_DND_ACTIVE_SMS` — the contact has SMS Do-Not-Disturb on (opted out / STOP). Confirms the `conversations/message.write` scope now works (request reached GHL). `sendGhlSms` now returns a `code:"dnd"`, and `/api/otp/request` returns **`409 { status:"sms_opted_out" }`** with a clear message instead of the generic 502, so the frontend can guide the user. **⚠️ Product note:** using GHL SMS for OTP means any DND/opted-out number can't receive a code → locked out of the tool (a dedicated verify service wouldn't have this). Immediate fix for testing: clear DND on the contact in GHL. tsc clean.
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.

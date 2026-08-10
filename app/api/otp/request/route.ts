@@ -90,6 +90,12 @@ export async function POST(request: NextRequest) {
   const sent = await sendGhlSms(contactId, message, ghl.token)
   if (!sent.ok) {
     console.log("[otp] GHL SMS send failed:", sent.error)
+    if (sent.code === "dnd") {
+      return NextResponse.json(
+        { status: "sms_opted_out", error: "This number has opted out of texts from us. Reply START to opt back in, or use a different number." },
+        { status: 409, headers: cors },
+      )
+    }
     return NextResponse.json({ error: "We couldn't send your code. Please check the number and try again." }, { status: 502, headers: cors })
   }
 

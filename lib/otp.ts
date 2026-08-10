@@ -59,7 +59,7 @@ export async function sendGhlSms(
   contactId: string,
   message: string,
   token: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; code?: "dnd" | "error"; error?: string }> {
   const body: Record<string, unknown> = { type: "SMS", contactId, message }
   const from = process.env.OTP_SMS_FROM
   if (from) body.fromNumber = from
@@ -75,7 +75,12 @@ export async function sendGhlSms(
     body: JSON.stringify(body),
     cache: "no-store",
   })
-  if (!res.ok) return { ok: false, error: `GHL SMS send failed (${res.status}): ${(await res.text()).slice(0, 300)}` }
+  if (!res.ok) {
+    const detail = await res.text()
+    // GHL blocks sends to contacts with SMS DND (opted out / STOP) — surface it distinctly.
+    const code = /dnd/i.test(detail) ? "dnd" : "error"
+    return { ok: false, code, error: `GHL SMS send failed (${res.status}): ${detail.slice(0, 300)}` }
+  }
   return { ok: true }
 }
 
