@@ -314,9 +314,22 @@ Implements `docs/crm-capture-plan.md`: on a **real** analysis, push scores/utili
 - **`/api/analyze`** — after `buildAnalysis`, if **`!mock` && `CREDIT_CRM_SYNC!=off` && GHL configured && contact_ref**: resolve custom fields (`resolveContactCustomFields`) → `upsertContact` (standard + custom) → `applyCreditUsedTag`. **Best-effort try/catch — a GHL failure never fails the analysis.**
 - `lib/credit.ts` `isCrmSyncEnabled()`; `.env.example` `CREDIT_CRM_SYNC=on`.
 
-**Safety:** mock mode writes NOTHING to GHL (no CRM pollution during frontend testing). If the GHL custom fields don't exist yet, `resolveContactCustomFields` just leaves them unresolved (logged) — no crash; they populate once created.
+**Safety:** mock mode writes NOTHING to GHL by default (no CRM pollution during frontend testing). If the GHL custom fields don't exist yet, `resolveContactCustomFields` just leaves them unresolved (logged) — no crash; they populate once created. **Test override:** `CREDIT_CRM_SYNC_IN_MOCK=on` lets mock runs push the mock/Sternberg data to GHL to test the mapping without a real analysis (off in production). Requires `reports.contact_ref` (set via `/api/consent`).
 
 **Verified:** `tsc` clean; BAT untouched. ⏳ Needs: create the custom fields in GHL, then a **real** analysis re-validation run (confirm the new name fields extract cleanly AND scores/accounts still come back full — schema changed).
+
+### 2026-08-10 — Fix: CRM fields not landing (phone-format mismatch) + name null
+
+**Symptom:** GHL contact had only the phone — no name, tags, or custom fields. Logs showed no `CRM sync failed` (block didn't throw); DB showed real analysis (`openrouter:…`, 3 scores) + `contact_ref` set. So the block ran but wrote to the wrong contact.
+
+**Root cause:** phone format inconsistency. `/api/otp/request` created the contact as **E.164 `+18163804331`**, but `consent` stored `contact_ref` as **10-digit `8163804331`**, so `/api/analyze`'s upsert didn't match the E.164 contact → name/tag/fields went to a **duplicate**, not the visible contact.
+
+**Fixes:**
+- Normalize phone to **E.164 everywhere**: `consent` now stores `contact_ref` via `normalizeUsPhone`; `/api/analyze` normalizes `contact_ref`→E.164 before upserting. All upserts now hit ONE contact.
+- Strengthened the name-extraction prompt (model returned `null` on a report that clearly has a name).
+- Added `[credit] CRM sync ok: contact=… fields=N unresolved=…` log so we can see exactly which custom fields mapped (and which GHL fields are missing/mis-named).
+
+**Verified:** `tsc` clean. ⏳ Redeploy + re-test; delete the old/duplicate test contacts in GHL first to avoid confusion.
 
 ---
 

@@ -42,7 +42,9 @@ export async function POST(request: NextRequest) {
   }
 
   const email = body.email ? normalizeEmail(body.email) : ""
-  const phone = body.phone ? normalizePhone(body.phone) : ""
+  // Normalize to E.164 so the phone matches the contact created at /api/otp/request
+  // (avoids a duplicate GHL contact). Fall back to loose normalization if not US-parseable.
+  const phone = normalizeUsPhone(body.phone ?? "") ?? (body.phone ? normalizePhone(body.phone) : "")
   const consentVersion = body.consentVersion?.trim() || "unversioned"
   const contactRef = body.contactId?.trim() || email || phone || null
 

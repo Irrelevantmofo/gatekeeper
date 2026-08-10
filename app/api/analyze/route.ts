@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders, getGHLConfig, resolveContactCustomFields, upsertContact } from "@/lib/ghl"
 import { CREDIT_REPORTS_BUCKET, getSupabaseAdmin } from "@/lib/supabase"
 import { applyCreditUsedTag, isCrmSyncEnabled, REPORT_STATUS, useMockExtraction } from "@/lib/credit"
+import { normalizeUsPhone } from "@/lib/otp"
 import { buildMockExtraction, type RawExtraction } from "@/lib/credit-extraction"
 import { extractReportFacts } from "@/lib/llm-extract"
 import { buildAnalysis, buildBestPath } from "@/lib/credit-simulator"
@@ -124,20 +125,25 @@ export async function POST(request: NextRequest) {
     const maxN = Number.parseInt(process.env.RECOMMENDATIONS_MAX_N || "5", 10) || 5
     const analysis = buildAnalysis(reportId, extracted, maxN)
 
-    // ── CRM sync → GHL (REAL analysis only; never in mock, so test runs can't
-    //    pollute the CRM). Best-effort: a GHL failure must not fail the analysis.
-    if (!mock && isCrmSyncEnabled() && report.contact_ref) {
+    // ── CRM sync → GHL. Real analysis only by default (mock never pollutes the
+    //    CRM). CREDIT_CRM_SYNC_IN_MOCK=on is a TEST override to exercise the
+    //    mapping with mock data. Best-effort: a GHL failure never fails analysis.
+    const crmSyncAllowed = isCrmSyncEnabled() && (!mock || process.env.CREDIT_CRM_SYNC_IN_MOCK === "on")
+    if (crmSyncAllowed && report.contact_ref) {
       const ghl = getGHLConfig()
       if (ghl) {
         try {
           const bestPath = buildBestPath(analysis, 700)
           const payload = buildCrmPayload(extracted, bestPath)
-          const { resolved } = await resolveContactCustomFields(payload.custom, ghl.token, ghl.locationId)
+          const { resolved, unresolved } = await resolveContactCustomFields(payload.custom, ghl.token, ghl.locationId)
           const ref = report.contact_ref as string
+          const isEmail = ref.includes("@")
+          // Normalize the phone to E.164 so this upsert lands on the SAME contact
+          // that /api/otp/request created (not a 10-digit duplicate).
           const contact = await upsertContact(
             {
-              email: ref.includes("@") ? ref : undefined,
-              phone: ref.includes("@") ? undefined : ref,
+              email: isEmail ? ref : undefined,
+              phone: isEmail ? undefined : normalizeUsPhone(ref) ?? ref,
               firstName: payload.standard.firstName,
               lastName: payload.standard.lastName,
               customFields: resolved,
@@ -146,6 +152,7 @@ export async function POST(request: NextRequest) {
             ghl.locationId,
           )
           await applyCreditUsedTag(contact.id, ghl.token) // re-entry block tag (plan §3.5)
+          console.log(`[credit] CRM sync ok: contact=${contact.id} fields=${resolved.length} unresolved=${unresolved.join(",") || "none"}`)
         } catch (err) {
           console.log("[credit] CRM sync failed (non-fatal):", err instanceof Error ? err.message : err)
         }
