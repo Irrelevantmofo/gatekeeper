@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders, getGHLConfig, normalizePhone, upsertContact } from "@/lib/ghl"
 import { getSupabaseAdmin } from "@/lib/supabase"
-import { CREDIT_CONTACT_SOURCE, parseClientIp } from "@/lib/credit"
+import { applyCreditLeadTag, CREDIT_CONTACT_SOURCE, parseClientIp } from "@/lib/credit"
 import { createAndStoreCode, dayStamp, getResendCooldownSec, isOtpBypass, normalizeUsPhone, otpRateLimitOk, sendGhlSms } from "@/lib/otp"
 
 // POST /api/otp/request — generate a code, store it (hashed), and SMS it via GHL
@@ -50,9 +50,10 @@ export async function POST(request: NextRequest) {
     const ghl = getGHLConfig()
     if (ghl) {
       try {
-        await upsertContact({ phone: normalizePhone(phone), firstName: body.firstName?.trim(), lastName: body.lastName?.trim(), source: CREDIT_CONTACT_SOURCE }, ghl.token, ghl.locationId)
+        const contact = await upsertContact({ phone: normalizePhone(phone), firstName: body.firstName?.trim(), lastName: body.lastName?.trim(), source: CREDIT_CONTACT_SOURCE }, ghl.token, ghl.locationId)
+        await applyCreditLeadTag(contact.id, ghl.token)
       } catch (err) {
-        console.log("[otp] bypass contact upsert failed (continuing):", err instanceof Error ? err.message : err)
+        console.log("[otp] bypass contact upsert/tag failed (continuing):", err instanceof Error ? err.message : err)
       }
     }
     return NextResponse.json({ status: "sent", bypass: true, resendAfter: getResendCooldownSec() }, { status: 200, headers: cors })
@@ -75,6 +76,13 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.log("[otp] contact upsert failed:", err instanceof Error ? err.message : err)
     return NextResponse.json({ error: "We couldn't start verification. Please try again." }, { status: 502, headers: cors })
+  }
+
+  // Lead/segmentation tag (best-effort — never block the OTP send).
+  try {
+    await applyCreditLeadTag(contactId, ghl.token)
+  } catch (err) {
+    console.log("[otp] lead tag failed (continuing):", err instanceof Error ? err.message : err)
   }
 
   const code = await createAndStoreCode(supabase, phone, phone, parseClientIp(request))

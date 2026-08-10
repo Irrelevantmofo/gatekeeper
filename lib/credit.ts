@@ -94,10 +94,16 @@ export function getMaxPages(): number {
   return Number.isFinite(n) && n > 0 ? n : 60
 }
 
-// Applies the credit-analyzer used-tag to a GHL contact (plan §4.1, step 7).
-// Reuses lib/ghl.ts constants read-only (BAT untouched). GHL merges tags, so
-// this is idempotent.
-export async function applyCreditUsedTag(contactId: string, token: string): Promise<void> {
+// Lead tag applied at OTP/contact creation so every credit-tool conversation is
+// filterable into its own GHL Conversation View (keeps OTP SMS out of the main
+// inbox). Distinct from the used-tag. Override via CREDIT_LEAD_TAG.
+export function getCreditLeadTag(): string {
+  return (process.env.CREDIT_LEAD_TAG || "credit-simulator").toLowerCase()
+}
+
+// Adds a tag to a GHL contact. Reuses lib/ghl.ts constants read-only (BAT
+// untouched). GHL merges tags, so this is idempotent.
+async function addContactTag(contactId: string, tag: string, token: string): Promise<void> {
   const { GHL_BASE_URL, GHL_API_VERSION } = await import("@/lib/ghl")
   const res = await fetch(`${GHL_BASE_URL}/contacts/${contactId}/tags`, {
     method: "POST",
@@ -107,8 +113,12 @@ export async function applyCreditUsedTag(contactId: string, token: string): Prom
       "Content-Type": "application/json",
       Accept: "application/json",
     },
-    body: JSON.stringify({ tags: [getCreditUsedTag()] }),
+    body: JSON.stringify({ tags: [tag] }),
     cache: "no-store",
   })
-  if (!res.ok) throw new Error(`GHL add credit tag failed (${res.status})`)
+  if (!res.ok) throw new Error(`GHL add tag failed (${res.status})`)
 }
+
+// The re-entry / "used" tag (plan §4.1 step 7) and the lead/segmentation tag.
+export const applyCreditUsedTag = (contactId: string, token: string) => addContactTag(contactId, getCreditUsedTag(), token)
+export const applyCreditLeadTag = (contactId: string, token: string) => addContactTag(contactId, getCreditLeadTag(), token)

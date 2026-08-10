@@ -353,6 +353,10 @@ Client has A2P 10DLC on GHL → deliver OTP through **GHL Conversations API** in
 
 **⚠️ Requires GHL token scope `conversations/message.write`** (add it, like the custom-fields scope earlier). **Verified:** `tsc` clean; BAT untouched. ⏳ Add the scope + redeploy; test send (a US number to receive, or read outbound in GHL Conversations). Dev bypass unaffected.
 
+### 2026-08-11 — Lead tag for GHL Conversation-View segmentation
+
+To keep OTP SMS out of the main inbox: apply a distinct **`credit-simulator`** tag (env `CREDIT_LEAD_TAG`) to the contact at `/api/otp/request` (both bypass + real paths), so all credit-tool threads can be filtered into their own GHL **Conversation View**. `lib/credit.ts` refactored to a generic `addContactTag()` with `applyCreditUsedTag`/`applyCreditLeadTag` wrappers. Best-effort — never blocks the OTP send. `.env.example` updated. tsc clean.
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.
