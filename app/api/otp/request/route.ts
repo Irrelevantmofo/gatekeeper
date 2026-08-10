@@ -2,11 +2,11 @@ import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders, getGHLConfig, normalizePhone, upsertContact } from "@/lib/ghl"
 import { getSupabaseAdmin } from "@/lib/supabase"
 import { CREDIT_CONTACT_SOURCE, parseClientIp } from "@/lib/credit"
-import { dayStamp, getResendCooldownSec, getTelnyxConfig, isOtpBypass, normalizeUsPhone, otpRateLimitOk, telnyxSendCode } from "@/lib/otp"
+import { createAndStoreCode, dayStamp, getResendCooldownSec, isOtpBypass, normalizeUsPhone, otpRateLimitOk, sendGhlSms } from "@/lib/otp"
 
-// POST /api/otp/request — send a phone verification code (plan: docs/otp-access-plan.md).
-// Captures the lead in GHL, rate-limits (anti SMS-pumping), then sends via Telnyx
-// Verify — unless OTP_BYPASS=on (dev: no SMS, fixed code accepted at /verify).
+// POST /api/otp/request — generate a code, store it (hashed), and SMS it via GHL
+// (LC Phone / existing A2P). Also captures the lead as a GHL contact. Rate-limited.
+// OTP_BYPASS=on skips code generation + the SMS (dev; fixed code at /verify).
 
 export const runtime = "nodejs"
 
@@ -34,7 +34,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Please enter a valid US phone number." }, { status: 400, headers: cors })
   }
 
-  // Rate limit (skipped effect in bypass since no SMS, but still bounds abuse).
   const ip = parseClientIp(request) ?? "unknown"
   const day = dayStamp()
   const allowed = await otpRateLimitOk(supabase, [
@@ -46,31 +45,43 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ status: "rate_limited", retryAfter: 900 }, { status: 429, headers: cors })
   }
 
-  // Capture the lead in GHL now (best-effort — a GHL hiccup must not block OTP).
-  const ghl = getGHLConfig()
-  if (ghl) {
-    try {
-      await upsertContact(
-        { phone: normalizePhone(phone), firstName: body.firstName?.trim(), lastName: body.lastName?.trim(), source: CREDIT_CONTACT_SOURCE },
-        ghl.token,
-        ghl.locationId,
-      )
-    } catch (err) {
-      console.log("[otp] contact upsert failed (continuing):", err instanceof Error ? err.message : err)
-    }
-  }
-
-  // DEV BYPASS — no Telnyx call, no SMS cost.
+  // DEV BYPASS — capture the lead best-effort, but no code/SMS.
   if (isOtpBypass()) {
+    const ghl = getGHLConfig()
+    if (ghl) {
+      try {
+        await upsertContact({ phone: normalizePhone(phone), firstName: body.firstName?.trim(), lastName: body.lastName?.trim(), source: CREDIT_CONTACT_SOURCE }, ghl.token, ghl.locationId)
+      } catch (err) {
+        console.log("[otp] bypass contact upsert failed (continuing):", err instanceof Error ? err.message : err)
+      }
+    }
     return NextResponse.json({ status: "sent", bypass: true, resendAfter: getResendCooldownSec() }, { status: 200, headers: cors })
   }
 
-  if (!getTelnyxConfig()) {
-    return NextResponse.json({ error: "Verification is not configured." }, { status: 500, headers: cors })
+  // Real send needs a GHL contact id (SMS is addressed by contactId).
+  const ghl = getGHLConfig()
+  if (!ghl) {
+    return NextResponse.json({ error: "Server is missing GHL configuration." }, { status: 500, headers: cors })
   }
-  const sent = await telnyxSendCode(phone)
+
+  let contactId: string
+  try {
+    const contact = await upsertContact(
+      { phone: normalizePhone(phone), firstName: body.firstName?.trim(), lastName: body.lastName?.trim(), source: CREDIT_CONTACT_SOURCE },
+      ghl.token,
+      ghl.locationId,
+    )
+    contactId = contact.id
+  } catch (err) {
+    console.log("[otp] contact upsert failed:", err instanceof Error ? err.message : err)
+    return NextResponse.json({ error: "We couldn't start verification. Please try again." }, { status: 502, headers: cors })
+  }
+
+  const code = await createAndStoreCode(supabase, phone, phone, parseClientIp(request))
+  const message = `Your CreditCRB verification code is ${code}. Reply STOP to opt out.`
+  const sent = await sendGhlSms(contactId, message, ghl.token)
   if (!sent.ok) {
-    console.log("[otp] telnyx send failed:", sent.error)
+    console.log("[otp] GHL SMS send failed:", sent.error)
     return NextResponse.json({ error: "We couldn't send your code. Please check the number and try again." }, { status: 502, headers: cors })
   }
 

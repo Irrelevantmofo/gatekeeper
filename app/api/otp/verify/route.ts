@@ -1,12 +1,13 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders, getGHLConfig, searchContact } from "@/lib/ghl"
+import { getSupabaseAdmin } from "@/lib/supabase"
 import { getCreditUsedTag, isGateEnforced } from "@/lib/credit"
-import { getBypassCode, isOtpBypass, normalizeUsPhone, signVerificationToken, telnyxCheckCode } from "@/lib/otp"
+import { checkStoredCode, getBypassCode, isOtpBypass, normalizeUsPhone, signVerificationToken } from "@/lib/otp"
 
-// POST /api/otp/verify — check the code and, on success, issue a verificationToken.
-// Also enforces the re-entry block: if this verified phone's GHL contact already
-// carries the credit-analyzer-used tag (and the gate is enforced), returns
-// gate_closed — one verified phone → one analysis (plan §3.5).
+// POST /api/otp/verify — check the code (against our stored hash, or the fixed
+// bypass code) and, on success, issue a verificationToken. Also enforces the
+// re-entry block: a verified phone whose GHL contact already carries the
+// credit-analyzer-used tag is refused (gate_closed) when the gate is enforced.
 
 export const runtime = "nodejs"
 
@@ -16,6 +17,11 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   const cors = corsHeaders(request)
+
+  const supabase = getSupabaseAdmin()
+  if (!supabase) {
+    return NextResponse.json({ error: "Server is missing Supabase configuration." }, { status: 500, headers: cors })
+  }
 
   let body: { phone?: string; code?: string }
   try {
@@ -29,13 +35,19 @@ export async function POST(request: NextRequest) {
   if (!phone) return NextResponse.json({ error: "Please enter a valid US phone number." }, { status: 400, headers: cors })
   if (!code) return NextResponse.json({ error: "Enter the code we sent you." }, { status: 400, headers: cors })
 
-  // Check the code — dev bypass accepts the fixed code; else ask Telnyx.
-  const accepted = isOtpBypass() ? code === getBypassCode() : (await telnyxCheckCode(phone, code)).accepted
-  if (!accepted) {
-    return NextResponse.json({ status: "invalid_code" }, { status: 200, headers: cors })
+  // Check the code — dev bypass accepts the fixed code; else verify our stored hash.
+  if (isOtpBypass()) {
+    if (code !== getBypassCode()) {
+      return NextResponse.json({ status: "invalid_code" }, { status: 200, headers: cors })
+    }
+  } else {
+    const result = await checkStoredCode(supabase, phone, code)
+    if (result === "expired") return NextResponse.json({ status: "expired" }, { status: 200, headers: cors })
+    if (result === "too_many") return NextResponse.json({ status: "too_many_attempts" }, { status: 429, headers: cors })
+    if (result !== "ok") return NextResponse.json({ status: "invalid_code" }, { status: 200, headers: cors })
   }
 
-  // Re-entry block (§3.5): already-used contact can't run a second report.
+  // Re-entry block: already-used contact can't run a second report.
   const ghl = getGHLConfig()
   if (ghl && isGateEnforced()) {
     try {
@@ -49,8 +61,5 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  return NextResponse.json(
-    { status: "verified", verificationToken: signVerificationToken(phone) },
-    { status: 200, headers: cors },
-  )
+  return NextResponse.json({ status: "verified", verificationToken: signVerificationToken(phone) }, { status: 200, headers: cors })
 }

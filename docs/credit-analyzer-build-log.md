@@ -341,6 +341,18 @@ Log revealed it: `CRM sync failed: GHL get custom fields failed (401) "The token
 
 **Verified:** `tsc` clean. After redeploy + scope, the `[credit] CRM sync ok: contact=… fields=N unresolved=…` log confirms how many fields mapped (unresolved = not-yet-created / mis-named GHL fields).
 
+### 2026-08-11 — OTP pivot: backend-owned codes, sent via GHL SMS (Telnyx retired)
+
+Client has A2P 10DLC on GHL → deliver OTP through **GHL Conversations API** instead of Telnyx, but keep verification **backend-owned** (our token gate + rate limits).
+
+**Built:**
+- **Migration `0002_phone_verifications`** — `phone_verifications` table (hashed code, expiry, attempts, verified_at), RLS deny-all. Applied via MCP.
+- **`lib/otp.ts`** rewritten — `generateCode`/`hashCode` (HMAC-peppered with `OTP_TOKEN_SECRET`), `createAndStoreCode` + `checkStoredCode` (expiry/attempts), and **`sendGhlSms`** = `POST {GHL}/conversations/messages {type:"SMS",contactId,message,fromNumber?}` (isolated; verify endpoint/version vs docs). Telnyx functions removed.
+- **`/api/otp/request`** — upsert contact (need `contactId` to address SMS) → store code → GHL SMS. **`/api/otp/verify`** — `checkStoredCode` (or bypass) → re-entry gate → `verificationToken`.
+- `.env.example` — new `OTP_CODE_LENGTH`/`OTP_TTL_MINUTES`/`OTP_MAX_ATTEMPTS`/`OTP_SMS_FROM`; Telnyx retired.
+
+**⚠️ Requires GHL token scope `conversations/message.write`** (add it, like the custom-fields scope earlier). **Verified:** `tsc` clean; BAT untouched. ⏳ Add the scope + redeploy; test send (a US number to receive, or read outbound in GHL Conversations). Dev bypass unaffected.
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.

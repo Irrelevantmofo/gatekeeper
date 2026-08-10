@@ -118,9 +118,11 @@ export async function POST(request: NextRequest) {
       })
       .eq("id", reportId)
 
-    // NOTE: applying the GHL used-tag (plan step 7) is deferred while the gate is
-    // observe-only for testing — tagging would pollute the test contact. It runs
-    // in production once CREDIT_GATE_ENFORCED=true. See lib/credit.applyCreditUsedTag.
+    // The credit used-tag (`credit-analyzer-used`) is applied in the CRM-sync
+    // block below — the ONLY place any credit tag is written — after a successful
+    // contact upsert. It is NOT gated by CREDIT_GATE_ENFORCED (that flag only
+    // controls the re-entry BLOCK at /api/consent + /api/otp/verify). We never
+    // write BAT's `business-analyzer-used` tag anywhere in the credit flow.
 
     const maxN = Number.parseInt(process.env.RECOMMENDATIONS_MAX_N || "5", 10) || 5
     const analysis = buildAnalysis(reportId, extracted, maxN)

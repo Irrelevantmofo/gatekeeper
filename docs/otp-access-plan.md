@@ -6,7 +6,14 @@
 >
 > ⚠️ This supersedes the earlier "no form / pull phone silently from GHL context" idea in `credit-analyzer-plan.md` §4.2. Identity is now an **explicit, verified phone number**, not an inherited one.
 >
-> **✅ DECISION + IMPLEMENTATION (2026-08-08):** verification uses **Telnyx Verify** (purpose-built OTP), with **GHL** as the CRM/follow-up layer. Because Telnyx Verify manages the codes, the `phone_verifications` table in §4 is **NOT needed** and was not created. Built: `lib/otp.ts`, `POST /api/otp/request`, `POST /api/otp/verify`, and a token gate in `/api/consent`. **Dev bypass** (`OTP_BYPASS=on`, code `000000`) lets the whole flow be tested without a US number/SMS. Sections §4 (table) and §7 (env) below reflect the *general* design; the Telnyx env vars in `.env.example` are the source of truth.
+> **✅ FINAL DECISION (2026-08-11, revised): BACKEND-owned OTP, sent via GHL's SMS API.** We generate/store(hashed)/verify the code ourselves (Supabase `phone_verifications`, migration `0002`) and deliver it through **GHL Conversations `POST /conversations/messages`** on the account's existing A2P 10DLC. This keeps the backend `verificationToken` gate + custom rate limiting, while avoiding Telnyx/10DLC-of-our-own. Built: `lib/otp.ts` (code gen/hash/store/verify + `sendGhlSms`), `POST /api/otp/request`, `POST /api/otp/verify`. **Requires the GHL token scope `conversations/message.write`.** Dev bypass still works (`OTP_BYPASS=on`, `000000`). _(Supersedes both the Telnyx-Verify and GHL-native-form approaches below; those notes are historical.)_
+
+> **Earlier (2026-08-11): use GHL's built-in phone verification.** The GHL account **already has A2P 10DLC registered**, so GHL Forms/Surveys' native **"Verify Phone" OTP** can be used directly — it sends the code via LC Phone and auto-flags the contact verified. This **replaces the Telnyx path** and removes our OTP code from the critical path:
+> - **Frontend:** gate the simulator behind a GHL form/survey with the native Verify-Phone element. GHL captures + verifies the phone and tags the contact; then the tool loads.
+> - **Backend:** the Telnyx OTP is **parked** (`/api/otp/request`, `/api/otp/verify`, `lib/otp.ts` remain but unused). Set **`OTP_REQUIRED=off`** so `/api/consent` doesn't demand our token. Everything downstream is unchanged: consent → upload → analyze → CRM sync + `credit-analyzer-used` re-entry tag.
+> - Telnyx env vars are no longer needed. Optional later: have `/api/consent` verify GHL's "phone verified" flag server-side for defense-in-depth.
+>
+> _Prior (2026-08-08) decision — Telnyx Verify — is superseded but the code is left in place as a fallback if GHL SMS is ever unavailable._
 
 ---
 

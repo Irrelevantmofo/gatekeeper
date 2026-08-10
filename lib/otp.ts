@@ -1,15 +1,14 @@
 import crypto from "node:crypto"
 import type { SupabaseClient } from "@supabase/supabase-js"
+import { GHL_API_VERSION, GHL_BASE_URL } from "@/lib/ghl"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phone OTP via Telnyx Verify (plan: docs/otp-access-plan.md).
+// Phone OTP — BACKEND-OWNED codes, delivered via GHL's SMS API (LC Phone / the
+// account's existing A2P 10DLC). We generate, hash-store (Supabase
+// phone_verifications), and verify the code ourselves; GHL is just the pipe.
 //
-// Telnyx Verify manages code generation/expiry/checking, so we store NO codes.
-// This module isolates: config, US-phone normalization, the Telnyx Verify calls
-// (verify against docs), a signed verificationToken, and a coarse rate limiter.
-//
-// DEV BYPASS: with OTP_BYPASS=on, no Telnyx call is made — the fixed OTP_BYPASS_CODE
-// (default "000000") is accepted. Lets the flow be tested without a US number/SMS.
+// DEV BYPASS: OTP_BYPASS=on skips code generation + the GHL send; the fixed
+// OTP_BYPASS_CODE (default "000000") is accepted at /verify — test without SMS.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const isOtpBypass = () => process.env.OTP_BYPASS === "on"
@@ -18,14 +17,20 @@ export const getBypassCode = () => process.env.OTP_BYPASS_CODE || "000000"
 export const isOtpRequired = () => process.env.OTP_REQUIRED === "on"
 export const getResendCooldownSec = () => Number.parseInt(process.env.OTP_RESEND_COOLDOWN_SEC || "45", 10) || 45
 
-export function getTelnyxConfig(): { apiKey: string; profileId: string } | null {
-  const apiKey = process.env.TELNYX_API_KEY
-  const profileId = process.env.TELNYX_VERIFY_PROFILE_ID
-  if (!apiKey || !profileId) return null
-  return { apiKey, profileId }
+const codeLength = () => {
+  const n = Number.parseInt(process.env.OTP_CODE_LENGTH || "6", 10)
+  return Number.isFinite(n) && n >= 4 && n <= 8 ? n : 6
+}
+const ttlMinutes = () => {
+  const n = Number.parseInt(process.env.OTP_TTL_MINUTES || "5", 10)
+  return Number.isFinite(n) && n > 0 ? n : 5
+}
+const maxAttempts = () => {
+  const n = Number.parseInt(process.env.OTP_MAX_ATTEMPTS || "5", 10)
+  return Number.isFinite(n) && n > 0 ? n : 5
 }
 
-// Normalize to E.164 US, or null if it isn't a plausible US number (US-only launch).
+// Normalize to E.164 US, or null if not a plausible US number (US-only launch).
 export function normalizeUsPhone(raw: string): string | null {
   const digits = (raw || "").replace(/[^\d]/g, "")
   if (digits.length === 10) return `+1${digits}`
@@ -33,41 +38,97 @@ export function normalizeUsPhone(raw: string): string | null {
   return null
 }
 
-// ── Telnyx Verify (ISOLATED — verify request/response against current docs) ───
-const TELNYX_BASE = "https://api.telnyx.com/v2"
+// ── Code generation + hashing ─────────────────────────────────────────────────
+function generateCode(): string {
+  const max = 10 ** codeLength()
+  return crypto.randomInt(0, max).toString().padStart(codeLength(), "0")
+}
+// HMAC the code with OTP_TOKEN_SECRET (pepper) so a DB leak doesn't expose codes;
+// falls back to plain sha256 if no secret is set.
+function hashCode(code: string): string {
+  const secret = process.env.OTP_TOKEN_SECRET
+  return secret
+    ? crypto.createHmac("sha256", secret).update(code).digest("hex")
+    : crypto.createHash("sha256").update(code).digest("hex")
+}
 
-export async function telnyxSendCode(phone: string): Promise<{ ok: boolean; error?: string }> {
-  const cfg = getTelnyxConfig()
-  if (!cfg) return { ok: false, error: "Telnyx not configured" }
-  const res = await fetch(`${TELNYX_BASE}/verifications/sms`, {
+// ── GHL SMS send (ISOLATED — verify endpoint/version against current docs) ─────
+// POST /conversations/messages { type:"SMS", contactId, message, fromNumber? }.
+// Requires the token scope `conversations/message.write`.
+export async function sendGhlSms(
+  contactId: string,
+  message: string,
+  token: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const body: Record<string, unknown> = { type: "SMS", contactId, message }
+  const from = process.env.OTP_SMS_FROM
+  if (from) body.fromNumber = from
+
+  const res = await fetch(`${GHL_BASE_URL}/conversations/messages`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ phone_number: phone, verify_profile_id: cfg.profileId, timeout_secs: 300 }),
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Version: GHL_API_VERSION,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(body),
     cache: "no-store",
   })
-  if (!res.ok) return { ok: false, error: `Telnyx send failed (${res.status})` }
+  if (!res.ok) return { ok: false, error: `GHL SMS send failed (${res.status}): ${(await res.text()).slice(0, 300)}` }
   return { ok: true }
 }
 
-export async function telnyxCheckCode(phone: string, code: string): Promise<{ accepted: boolean; error?: string }> {
-  const cfg = getTelnyxConfig()
-  if (!cfg) return { accepted: false, error: "Telnyx not configured" }
-  const res = await fetch(`${TELNYX_BASE}/verifications/by_phone_number/${encodeURIComponent(phone)}/actions/verify`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ code, verify_profile_id: cfg.profileId }),
-    cache: "no-store",
+// ── OTP store + verify (Supabase phone_verifications) ─────────────────────────
+// Generate a code, store its hash with a TTL, and return the plaintext to send.
+export async function createAndStoreCode(
+  supabase: SupabaseClient,
+  phone: string,
+  contactRef: string | null,
+  ip: string | null,
+): Promise<string> {
+  const code = generateCode()
+  await supabase.from("phone_verifications").insert({
+    phone,
+    code_hash: hashCode(code),
+    expires_at: new Date(Date.now() + ttlMinutes() * 60_000).toISOString(),
+    max_attempts: maxAttempts(),
+    contact_ref: contactRef,
+    ip,
   })
-  if (!res.ok) return { accepted: false, error: `Telnyx verify failed (${res.status})` }
-  const data = (await res.json()) as { data?: { response_code?: string } }
-  return { accepted: (data.data?.response_code ?? "").toLowerCase() === "accepted" }
+  return code
+}
+
+export type OtpCheck = "ok" | "invalid" | "expired" | "too_many"
+
+// Verify against the latest unverified code for the phone.
+export async function checkStoredCode(supabase: SupabaseClient, phone: string, code: string): Promise<OtpCheck> {
+  const { data } = await supabase
+    .from("phone_verifications")
+    .select("id, code_hash, expires_at, attempts, max_attempts")
+    .eq("phone", phone)
+    .is("verified_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!data) return "invalid"
+  if (new Date(data.expires_at as string) < new Date()) return "expired"
+  if ((data.attempts as number) >= (data.max_attempts as number)) return "too_many"
+
+  if (data.code_hash !== hashCode(code)) {
+    await supabase.from("phone_verifications").update({ attempts: (data.attempts as number) + 1 }).eq("id", data.id)
+    return "invalid"
+  }
+  await supabase.from("phone_verifications").update({ verified_at: new Date().toISOString() }).eq("id", data.id)
+  return "ok"
 }
 
 // ── verificationToken: stateless, HMAC-signed { phone, exp } ──────────────────
 function tokenSecret(): string | null {
   return process.env.OTP_TOKEN_SECRET || null
 }
-function ttlMs(): number {
+function verificationTtlMs(): number {
   const m = Number.parseInt(process.env.OTP_VERIFICATION_TTL_MINUTES || "15", 10)
   return (Number.isFinite(m) && m > 0 ? m : 15) * 60_000
 }
@@ -75,7 +136,7 @@ function ttlMs(): number {
 export function signVerificationToken(phone: string): string | null {
   const secret = tokenSecret()
   if (!secret) return null
-  const payload = Buffer.from(JSON.stringify({ phone, exp: Date.now() + ttlMs() })).toString("base64url")
+  const payload = Buffer.from(JSON.stringify({ phone, exp: Date.now() + verificationTtlMs() })).toString("base64url")
   const sig = crypto.createHmac("sha256", secret).update(payload).digest("base64url")
   return `${payload}.${sig}`
 }
@@ -97,9 +158,7 @@ export function verifyVerificationToken(token: string | undefined | null, phone:
   }
 }
 
-// ── Coarse rate limiting (anti SMS-pumping). Reuses the rate_limits table.
-// bucket_key embeds the day, so counters reset daily by key. Read-then-write is
-// racy but fine for deterrence. limit<=0 disables that bucket.
+// ── Coarse rate limiting (anti SMS-pumping). Reuses the rate_limits table. ─────
 export async function otpRateLimitOk(
   supabase: SupabaseClient,
   buckets: { key: string; limit: number }[],
