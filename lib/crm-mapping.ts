@@ -25,6 +25,67 @@ function median(nums: number[]): number | null {
   return v.length % 2 ? v[mid] : Math.round((v[mid - 1] + v[mid]) / 2)
 }
 
+// Minimal HTML escape so creditor names / reason codes can't break the markup.
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
+// Builds the personalized results block that the GHL "results" email renders via
+// the `credit_actions_html` custom field (GHL renders custom-field HTML, same as
+// the funding tool's matched_offers_html). Kept lean and inline-styled — a light,
+// mostly-text block inboxes better than a heavy template (docs/feedback-loop-plan.md §6).
+function buildActionsHtml(raw: RawExtraction, bestPath: BestPathResult): string {
+  const scored = raw.scores.filter((s) => finite(s.value))
+  if (scored.length === 0 && bestPath.steps.length === 0) return "" // nothing worth sending
+
+  const mid = median(scored.map((s) => s.value).filter(finite))
+  const repBureau =
+    scored.find((s) => s.value === mid)?.bureau ?? scored[0]?.bureau ?? null
+  const reasonCodes = (repBureau ? scored.find((s) => s.bureau === repBureau)?.reason_codes : []) ?? []
+
+  const P = 'style="margin:0 0 16px"'
+  const H3 = 'style="font-size:19px;margin:20px 0 8px"'
+  const parts: string[] = []
+  parts.push('<div style="font-family:Arial,Helvetica,sans-serif;font-size:18px;line-height:1.5;color:#0c2340">')
+
+  // Scores
+  if (scored.length) {
+    const line = scored.map((s) => `${esc(s.bureau)} <strong>${s.value}</strong>`).join(" &nbsp;·&nbsp; ")
+    parts.push(`<h2 style="font-size:22px;margin:0 0 12px">Your Credit Snapshot</h2>`)
+    parts.push(`<p ${P}>${line} <span style="color:#5a6b82">(${esc(raw.report_meta.score_model ?? "VantageScore 3.0")})</span></p>`)
+  }
+
+  // What's holding the score back (top 3 reason codes)
+  if (reasonCodes.length) {
+    parts.push(`<h3 ${H3}>What's holding your score back</h3>`)
+    parts.push(`<ul ${P}>${reasonCodes.slice(0, 3).map((c) => `<li>${esc(String(c))}</li>`).join("")}</ul>`)
+  }
+
+  // Recommended next steps (from the fastest-path engine)
+  parts.push(`<h3 ${H3}>Your recommended next steps</h3>`)
+  if (bestPath.steps.length) {
+    const li = bestPath.steps
+      .map(
+        (st) =>
+          `<li style="margin-bottom:8px">Pay <strong>${esc(st.creditor)}</strong> ${esc(st.action)} — <strong>+${st.pointsGained} pts</strong> (score about ${st.scoreAfter})</li>`,
+      )
+      .join("")
+    parts.push(`<ol ${P}>${li}</ol>`)
+    if (bestPath.totalPayDown > 0) {
+      parts.push(`<p ${P}><strong>Cash to get there:</strong> $${Math.round(bestPath.totalPayDown).toLocaleString()}</p>`)
+    }
+    parts.push(`<p ${P}><strong>Projected score:</strong> about ${bestPath.projectedScore}</p>`)
+  } else {
+    parts.push(
+      `<p ${P}>Based on your report, paying down balances alone won't move your score much right now — the bigger levers (like addressing negative items and letting late marks age off) are best mapped on a quick call.</p>`,
+    )
+  }
+  if (bestPath.note) parts.push(`<p style="margin:0 0 16px;color:#5a6b82">${esc(bestPath.note)}</p>`)
+
+  parts.push("</div>")
+  return parts.join("")
+}
+
 // VantageScore-style bands / funding tiers from a score.
 function bandFor(s: number): string {
   if (s < 580) return "Poor"
@@ -114,6 +175,9 @@ export function buildCrmPayload(raw: RawExtraction, bestPath: BestPathResult): C
   put("points_to_700", Math.max(0, 700 - bestPath.projectedScore))
   if (bestPath.totalPayDown > 0) put("cash_to_target", Math.round(bestPath.totalPayDown))
   if (bestPath.steps[0]) put("top_recommended_action", `Pay down ${bestPath.steps[0].creditor} under 10%`)
+
+  // ── Results email content — rendered HTML block (GHL renders custom-field HTML)
+  put("credit_actions_html", buildActionsHtml(raw, bestPath))
 
   // ── Meta ────────────────────────────────────────────────────────────────────
   put("report_vendor", raw.report_meta.vendor)

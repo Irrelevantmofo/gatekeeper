@@ -361,6 +361,25 @@ To keep OTP SMS out of the main inbox: apply a distinct **`credit-simulator`** t
 
 "We couldn't send your code" on a repeat number was **GHL DND**: `400 CONVERSATIONS_MSG_DND_ACTIVE_SMS` — the contact has SMS Do-Not-Disturb on (opted out / STOP). Confirms the `conversations/message.write` scope now works (request reached GHL). `sendGhlSms` now returns a `code:"dnd"`, and `/api/otp/request` returns **`409 { status:"sms_opted_out" }`** with a clear message instead of the generic 502, so the frontend can guide the user. **⚠️ Product note:** using GHL SMS for OTP means any DND/opted-out number can't receive a code → locked out of the tool (a dedicated verify service wouldn't have this). Immediate fix for testing: clear DND on the contact in GHL. tsc clean.
 
+### 2026-08-12 — Results-email opt-in: `/api/report-email` + `credit_actions_html` (feedback loop)
+
+**Goal:** capture the user's email via a results-popup on the simulator screen and trigger a GHL automation that emails their analysis + recommended actions + feedback questions ("rate 1–5, reply"). Plan: [`docs/feedback-loop-plan.md`](./feedback-loop-plan.md). Design locked with client: **single email**, GHL-workflow-driven (tag trigger), reply-only sentiment capture, booking/YouTube follow-up deferred.
+
+**Built (all additive; BAT untouched):**
+- **`app/api/report-email/route.ts`** (new) — `POST { reportId, email }`: validates email, loads the report's `contact_ref`, **upserts the email onto the existing GHL contact** (matches by E.164 phone so no duplicate — mirrors the `/api/analyze` upsert), then applies the **`credit-results-optin`** tag which TRIGGERS the GHL email automation. Thin trigger: all email content/timing/sending lives in GHL. **Mock-safe** (skips GHL in mock mode unless `CREDIT_CRM_SYNC_IN_MOCK=on`). **Data minimization:** the email is NOT persisted in Supabase (GHL is the system of record).
+- **`lib/credit.ts`** — `getCreditResultsOptinTag()` (env `CREDIT_RESULTS_OPTIN_TAG`, default `credit-results-optin`) + `applyCreditResultsOptinTag()` wrapper (reuses the generic `addContactTag`).
+- **`lib/crm-mapping.ts`** — `buildActionsHtml(raw, bestPath)` renders a lean, inline-styled HTML block (3-bureau scores, top reason codes, fastest-path steps, cash needed, projected score) into the **`credit_actions_html`** custom field (registered in GHL by the user); the results email merges it. Handles empty-steps / low-score fallback and HTML-escapes creditor names + reason codes.
+
+**Trigger design:** deliberately a NEW tag (`credit-results-optin`), not the existing `credit-analyzer-used` — the used-tag is applied back at `/api/analyze` *before* an email exists, so it can't guarantee a send destination. The opt-in tag is applied only after the email is on the contact.
+
+**Verified:** `tsc --noEmit` clean. BAT files (`lib/ghl.ts`, `app/api/{submit,check-contact,mark-used}`) untouched.
+
+**Open / follow-ups:**
+- Add `CREDIT_RESULTS_OPTIN_TAG` to `.env.example`.
+- **GHL config (user):** build the workflow (trigger = tag `credit-results-optin` → the single results+feedback email), and confirm the `credit_actions_html` field key slugifies to `credit_actions_html`. **Deliverability pre-flight** (SPF/DKIM/DMARC + monitored from/reply-to) is required since mail currently spams — see plan §6.
+- **Frontend:** build the results-email popup (prompt handed to the GHL Frontend AI) — 30s-after-value timing, email field, spam disclaimer, `POST /api/report-email`.
+- Live validation: real analysis → popup → submit → contact gets email + `credit-results-optin` → workflow email lands (test Gmail + Outlook) → reply shows in Conversations.
+
 ---
 
 <!-- TEMPLATE for future entries — copy below when a phase/chunk completes.

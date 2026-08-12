@@ -101,6 +101,15 @@ export function getCreditLeadTag(): string {
   return (process.env.CREDIT_LEAD_TAG || "credit-simulator").toLowerCase()
 }
 
+// Results opt-in tag applied by /api/report-email once the user gives their
+// email in the results popup. This tag is the TRIGGER for the GHL automation
+// that emails their analysis + recommended actions + feedback questions. It is
+// applied only AFTER the email is on the contact, so the send always has a
+// destination. Override via CREDIT_RESULTS_OPTIN_TAG. See docs/feedback-loop-plan.md.
+export function getCreditResultsOptinTag(): string {
+  return (process.env.CREDIT_RESULTS_OPTIN_TAG || "credit-results-optin").toLowerCase()
+}
+
 // Adds a tag to a GHL contact. Reuses lib/ghl.ts constants read-only (BAT
 // untouched). GHL merges tags, so this is idempotent.
 async function addContactTag(contactId: string, tag: string, token: string): Promise<void> {
@@ -119,6 +128,8 @@ async function addContactTag(contactId: string, tag: string, token: string): Pro
   if (!res.ok) throw new Error(`GHL add tag failed (${res.status})`)
 }
 
-// The re-entry / "used" tag (plan §4.1 step 7) and the lead/segmentation tag.
+// The re-entry / "used" tag (plan §4.1 step 7), the lead/segmentation tag, and
+// the results-email opt-in trigger tag.
 export const applyCreditUsedTag = (contactId: string, token: string) => addContactTag(contactId, getCreditUsedTag(), token)
 export const applyCreditLeadTag = (contactId: string, token: string) => addContactTag(contactId, getCreditLeadTag(), token)
+export const applyCreditResultsOptinTag = (contactId: string, token: string) => addContactTag(contactId, getCreditResultsOptinTag(), token)
