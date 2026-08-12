@@ -36,11 +36,11 @@ const MUTED = "#33475b" // secondary — still high-contrast on white
 const RULE = "#c9d2dd" // borders / dividers (clearly visible)
 const BOXBG = "#f4f7fb" // soft callout background
 
-// Minimum body font size is 20px per client requirement (60+ audience).
-const H2 = 'style="font-size:28px;font-weight:bold;line-height:1.3;margin:0 0 16px"'
-const H3 = `style="font-size:23px;font-weight:bold;line-height:1.3;margin:30px 0 12px;color:${TEXT}"`
-const P = 'style="font-size:20px;line-height:1.7;margin:0 0 18px"'
-const LI = 'style="font-size:20px;line-height:1.6;margin:0 0 14px"'
+// Minimum body font size is 18px (60+ audience).
+const H2 = 'style="font-size:26px;font-weight:bold;line-height:1.3;margin:0 0 16px"'
+const H3 = `style="font-size:22px;font-weight:bold;line-height:1.3;margin:30px 0 12px;color:${TEXT}"`
+const P = 'style="font-size:18px;line-height:1.7;margin:0 0 18px"'
+const LI = 'style="font-size:18px;line-height:1.6;margin:0 0 14px"'
 
 // Current scores + top reason codes (from the representative / middle bureau).
 function renderSnapshot(raw: RawExtraction): string {
@@ -57,10 +57,10 @@ function renderSnapshot(raw: RawExtraction): string {
   h += scored
     .map(
       (s) =>
-        `<div style="font-size:22px;line-height:1.5;margin:6px 0"><span>${esc(s.bureau)}:</span> <strong style="font-size:30px">${s.value}</strong></div>`,
+        `<div style="font-size:20px;line-height:1.5;margin:6px 0"><span>${esc(s.bureau)}:</span> <strong style="font-size:28px">${s.value}</strong></div>`,
     )
     .join("")
-  h += `<div style="font-size:20px;line-height:1.5;color:${MUTED};margin-top:12px">Scored on the ${model} scale</div>`
+  h += `<div style="font-size:18px;line-height:1.5;color:${MUTED};margin-top:12px">Scored on the ${model} scale</div>`
   h += `</div>`
 
   if (reasons.length) {
@@ -79,10 +79,10 @@ function renderSimulated(sim: SimResult, actions: string[]): string {
   if (!sim.perBureau.length) return ""
   let h = `<h3 ${H3}>Your Simulation Summary</h3>`
   if (actions.length) {
-    h += `<p style="font-size:20px;line-height:1.6;margin:0 0 10px"><strong>The changes you tried:</strong></p>`
+    h += `<p style="font-size:18px;line-height:1.6;margin:0 0 10px"><strong>The changes you tried:</strong></p>`
     h += `<ul style="margin:0 0 18px;padding-left:24px">${actions.map((a) => `<li ${LI}>${esc(a)}</li>`).join("")}</ul>`
   }
-  h += `<p style="font-size:20px;line-height:1.6;margin:0 0 10px"><strong>Your projected scores with those changes:</strong></p>`
+  h += `<p style="font-size:18px;line-height:1.6;margin:0 0 10px"><strong>Your projected scores with those changes:</strong></p>`
   h += `<ul style="margin:0 0 18px;padding-left:24px;list-style:none">`
   h += sim.perBureau
     .map((b) => {
@@ -90,7 +90,7 @@ function renderSimulated(sim: SimResult, actions: string[]): string {
       const up = delta >= 0
       const badge = `${up ? "+" : ""}${delta} point${Math.abs(delta) === 1 ? "" : "s"}`
       const color = up ? "#0a7d33" : "#b3261e"
-      return `<li ${LI}>${esc(b.bureau)}: <strong style="font-size:23px">${b.baseScore} &rarr; ${b.estimatedScore}</strong> <strong style="color:${color}">(${badge})</strong></li>`
+      return `<li ${LI}>${esc(b.bureau)}: <strong style="font-size:22px">${b.baseScore} &rarr; ${b.estimatedScore}</strong> <strong style="color:${color}">(${badge})</strong></li>`
     })
     .join("")
   h += `</ul>`
@@ -116,13 +116,13 @@ function renderFastestPath(bestPath: BestPathResult): string {
   } else {
     h += `<p ${P}>Paying down balances alone won't move your score much right now — the bigger levers (like addressing negative items and letting late marks age off) are best mapped on a quick call.</p>`
   }
-  if (bestPath.note) h += `<p style="font-size:20px;line-height:1.7;margin:0 0 18px;color:${MUTED}">${esc(bestPath.note)}</p>`
+  if (bestPath.note) h += `<p style="font-size:18px;line-height:1.7;margin:0 0 18px;color:${MUTED}">${esc(bestPath.note)}</p>`
   return h
 }
 
 function wrap(inner: string): string {
   if (!inner.trim()) return ""
-  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:20px;line-height:1.7;color:${TEXT};max-width:600px;margin:0 auto">${inner}</div>`
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:18px;line-height:1.7;color:${TEXT};max-width:600px;margin:0 auto">${inner}</div>`
 }
 
 // Analyze-time block: snapshot + fastest path (no live what-if yet).
