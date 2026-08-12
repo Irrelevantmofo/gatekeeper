@@ -1,25 +1,59 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { corsHeaders, getGHLConfig, normalizeEmail, upsertContact } from "@/lib/ghl"
+import { corsHeaders, getGHLConfig, normalizeEmail, resolveContactCustomFields, type ResolvedCustomField, upsertContact } from "@/lib/ghl"
 import { getSupabaseAdmin } from "@/lib/supabase"
 import { applyCreditResultsOptinTag, CREDIT_CONTACT_SOURCE, useMockExtraction } from "@/lib/credit"
 import { normalizeUsPhone } from "@/lib/otp"
+import { toAnalysis, type RawExtraction } from "@/lib/credit-extraction"
+import { buildBestPath, simulate, type SimScenario } from "@/lib/credit-simulator"
+import { buildResultsEmailHtml } from "@/lib/results-html"
 
-// POST /api/report-email — the user opted in via the results popup to have their
-// analysis emailed to them. We attach their email to the SAME GHL contact created
-// at /api/otp/request (phone) and enriched at /api/analyze (name + score/action
-// custom fields), then apply the `credit-results-optin` tag.
+// POST /api/report-email — the user clicked "Email me my results" on the summary
+// or fastest-path card. We attach their email to the SAME GHL contact created at
+// /api/otp/request (phone) and enriched at /api/analyze, refresh the
+// `credit_actions_html` field so the email reflects what they saw on screen
+// (their live what-if + the fastest path), then apply the `credit-results-optin`
+// tag which TRIGGERS the GHL results+feedback email.
 //
-// That tag is the TRIGGER for the GHL automation that sends the results +
-// recommended-actions + feedback email. All email content, timing, and sending
-// live in GHL — this endpoint is a thin trigger. Applying the tag only AFTER the
-// email is on the contact guarantees the send always has a destination.
+// The email content is recomputed SERVER-SIDE from the persisted facts + the
+// scenario/target the client forwards — same engine, same inputs, so it matches
+// the UI exactly (no trusting client-rendered HTML). Applying the tag only AFTER
+// the email is on the contact guarantees the send always has a destination.
 //
-// Data minimization (plan §9.3): the email is intentionally NOT persisted in
-// Supabase. GHL is the system of record for contact info.
+// Data minimization (plan §9.3): the email is NOT persisted in Supabase; GHL is
+// the system of record for contact info.
 
 export const runtime = "nodejs"
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function scenarioHasChanges(s: SimScenario): boolean {
+  return (s.payDown?.length ?? 0) > 0 || Object.keys(s.factorChanges ?? {}).length > 0
+}
+
+// Human-readable labels for the changes the user toggled (for the email's
+// "your simulated what-if" section). Uses the extracted accounts for creditor names.
+function describeScenario(accounts: { accountId: string; creditor: string }[], s: SimScenario): string[] {
+  const creditor = (id: string) => accounts.find((a) => a.accountId === id)?.creditor ?? "your card"
+  const labels: string[] = []
+  for (const p of s.payDown ?? []) {
+    if (p.targetUtilizationPct != null) {
+      labels.push(
+        p.targetUtilizationPct === 0
+          ? `Pay ${creditor(p.accountId)} off completely`
+          : `Pay ${creditor(p.accountId)} down to ${Math.round(p.targetUtilizationPct * 100)}% used`,
+      )
+    } else if (p.amount != null && p.amount > 0) {
+      labels.push(`Pay ${creditor(p.accountId)} $${Math.round(p.amount).toLocaleString()}`)
+    }
+  }
+  const fc = s.factorChanges ?? {}
+  if (fc.utilizationPct) labels.push(`Overall card usage to ${Math.round(fc.utilizationPct.to * 100)}%`)
+  if (fc.paymentOnTimePct) labels.push(`On-time payments ${Math.round(fc.paymentOnTimePct.from * 100)}% → ${Math.round(fc.paymentOnTimePct.to * 100)}%`)
+  if (fc.lengthYears) labels.push(`Credit age ${fc.lengthYears.from} → ${fc.lengthYears.to} yrs`)
+  if (fc.creditMixTypes) labels.push(`Types of credit ${fc.creditMixTypes.from} → ${fc.creditMixTypes.to}`)
+  if (fc.recentInquiries) labels.push(`Recent applications ${fc.recentInquiries.from} → ${fc.recentInquiries.to}`)
+  return labels
+}
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, { status: 204, headers: corsHeaders(request) })
@@ -36,7 +70,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  let body: { reportId?: string; email?: string }
+  let body: { reportId?: string; email?: string; scenario?: SimScenario; bestPathTarget?: number }
   try {
     body = await request.json()
   } catch {
@@ -80,20 +114,67 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // ── Build the personalized results HTML from the persisted facts + the live
+    //    scenario/target the client forwarded. Best-effort: if the analysis row
+    //    is missing or the custom-field scope is absent, we still attach the
+    //    email + tag (the email falls back to the analyze-time snapshot field).
+    let customFields: ResolvedCustomField[] = []
+    const { data: analysisRow } = await supabase
+      .from("report_analysis")
+      .select("extracted")
+      .eq("report_id", reportId)
+      .single()
+
+    if (analysisRow?.extracted) {
+      const extracted = analysisRow.extracted as RawExtraction
+      const input = toAnalysis(reportId, extracted)
+
+      // Match what the user saw: their target if sent, else the tool's rule
+      // (avg < 700 → aim for 700, else 850).
+      const vals = extracted.scores.map((s) => s.value).filter((v): v is number => typeof v === "number" && Number.isFinite(v))
+      const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0
+      const target = Number.isFinite(body.bestPathTarget) ? (body.bestPathTarget as number) : avg >= 700 ? 850 : 700
+      const bestPath = buildBestPath(input, target)
+
+      // The "Simulation Summary" reflects the user's manual what-if when the
+      // frontend forwards one. If it doesn't (they emailed straight from the
+      // fastest-path card), fall back to summarizing the fastest-path scenario
+      // itself — so the email ALWAYS shows BOTH a summary and the step-by-step path.
+      const manual: SimScenario = body.scenario ?? {}
+      const scenario: SimScenario = scenarioHasChanges(manual)
+        ? manual
+        : bestPath.scenario.payDown.length
+          ? { payDown: bestPath.scenario.payDown }
+          : {}
+      const sim = scenarioHasChanges(scenario) ? simulate(input, scenario) : null
+      const simActions = sim ? describeScenario(input.accounts, scenario) : []
+
+      const html = buildResultsEmailHtml(extracted, bestPath, sim, simActions)
+      if (html) {
+        try {
+          const r = await resolveContactCustomFields({ credit_actions_html: html }, ghl.token, ghl.locationId)
+          customFields = r.resolved
+          if (r.unresolved.length) console.log("[credit] report-email unresolved custom fields:", r.unresolved.join(","))
+        } catch (e) {
+          console.log("[credit] report-email custom-field resolve failed (attaching email+tag only):", e instanceof Error ? e.message : e)
+        }
+      }
+    }
+
     const ref = report.contact_ref as string
     // Match the existing contact by its phone (normally E.164 — set at OTP/consent)
-    // and add the email to it. If the ref is already an email, match/create on the
-    // new email. Never creates a duplicate for the normal phone-based flow.
+    // and add the email + refreshed results HTML. If the ref is already an email,
+    // match/create on the new email. Never creates a duplicate for the phone flow.
     const phone = ref.includes("@") ? undefined : normalizeUsPhone(ref) ?? ref
     const contact = await upsertContact(
-      { email, phone, source: CREDIT_CONTACT_SOURCE },
+      { email, phone, source: CREDIT_CONTACT_SOURCE, customFields },
       ghl.token,
       ghl.locationId,
     )
 
     // Fire the automation trigger — email is now on the contact.
     await applyCreditResultsOptinTag(contact.id, ghl.token)
-    console.log(`[credit] report-email ok: contact=${contact.id} opted in for results email`)
+    console.log(`[credit] report-email ok: contact=${contact.id} fields=${customFields.length} opted in for results email`)
     return NextResponse.json({ ok: true, synced: true }, { status: 200, headers: cors })
   } catch (err) {
     console.log("[credit] report-email failed (non-fatal to user):", err instanceof Error ? err.message : err)

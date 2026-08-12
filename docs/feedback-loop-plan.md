@@ -11,20 +11,18 @@
 ## 0. TL;DR — the flow
 
 ```
-Simulator screen showing (scores + fastest-path/summary visible)
-        │  ~30s later (once they've seen value)
+Simulator screen — "📧 Email me these results" button on the Summary card + Fastest-Path card
+        │  user clicks → popup (email field + spam disclaimer)
         ▼
-POPUP: "Want a copy? We'll email your analysis + recommended actions."
-       + disclaimer: "check your spam/junk folder — mark us 'not spam' so it lands next time"
-        │  user enters email
-        ▼
-POST /api/report-email { reportId, email }
-   → upsert email onto the GHL contact                (contact already has name + score + credit_actions_html from analyze)
-   → apply tag `credit-results-optin`                 (workflow trigger — email is now guaranteed present)
+POST /api/report-email { reportId, email, scenario, bestPathTarget }
+   → recompute what-if (simulate) + fastest path (buildBestPath) SERVER-SIDE from persisted facts
+   → refresh credit_actions_html on the contact  (snapshot + user's what-if + fastest-path steps)
+   → upsert email onto the GHL contact
+   → apply tag `credit-results-optin`             (workflow trigger — email is now guaranteed present)
         │
         ▼
 GHL Workflow (trigger = tag `credit-results-optin`)
-   └─ ONE email: results + recommended actions + feedback questions ("just reply 1–5")
+   └─ ONE email: results + simulated what-if + fastest-path actions + feedback questions ("just reply 1–5")
       (value delivery + reply-eliciting, in a single send)
 ```
 
@@ -51,25 +49,28 @@ Two hard truths this design solves:
 
 ---
 
-## 2. Frontend — the email-capture popup
+## 2. Frontend — the email-capture popup (lives in GHL Studio)
 
-**Component:** new `ResultsEmailModal.tsx`, rendered by `SimulatorScreen.tsx` (which already holds `reportId`).
+> The frontend runs in **GHL Studio** (we don't edit it directly). Changes are handed to the GHL
+> Frontend AI via [`results-popup-frontend-prompt.md`](./results-popup-frontend-prompt.md).
 
-**When it appears:**
-- Start a timer when the user reaches a "seen value" moment. In `SimulatorScreen`, the natural signals are: `bestPath` state becomes non-null (fastest-path card rendered, `SimulatorScreen.tsx:318`) or `showFloatingSummary` becomes true (`:233`). Fire the popup **30s after the first of those**.
-- **Fallback:** if neither happens (passive viewer), fire **45s after mount** — scores are visible immediately in the sticky card (`:269`), so there's always value on screen.
-- **Show once per session** (a `useRef`/`sessionStorage` guard), so it never nags.
+**Trigger (locked with client):** NOT a timed auto-popup. A **"📧 Email me these results" button**
+on the **Simulation Summary card** and the **Fastest-Path result card** (optionally also in the
+bottom action row) opens the modal on demand.
 
-**What it says (value framing, not "feedback"):**
+**What it says (value framing):**
 > **Want a copy of your results?**
 > Enter your email and we'll send your full 3-bureau analysis and your personalized recommended actions — free.
 > `[ email input ]`  `[ Email me my results ]`   ·   *No spam. Unsubscribe anytime.*
-> `[ No thanks ]`
+> `[ No thanks ]`  + spam-folder disclaimer.
 
-- Audience-fit (50–70): 18px+ text, large button, one field, high contrast (matches existing design system).
+- Audience-fit (50–70): 18px+ text, large button, one field, high contrast.
 - Basic email validation client-side (protects list hygiene, §6).
 
-**On submit:** `POST {BASE_URL}/api/report-email { reportId, email }` → on 200, show a brief "✓ Sent! Check your inbox." and close. On failure, keep it non-blocking (they still have the on-screen results).
+**On submit:** `POST {BASE_URL}/api/report-email { reportId, email, scenario, bestPathTarget }` —
+forwards the user's current what-if `scenario` (same object sent to `/api/simulate`) and the
+fastest-path `bestPathTarget`, so the backend renders the email to match the screen. On 200 show
+"✓ Sent! Check your inbox (and spam folder)."; on failure keep it non-blocking (results stay on screen).
 
 ---
 

@@ -1,84 +1,81 @@
-# Prompt for the GHL Frontend AI — "Email me my results" popup
+# Prompt for the GHL Frontend AI — UPDATE the "Email me my results" popup
 
-> Copy everything in the code block below into the frontend AI. It's self-contained (stack, API contract, behavior, copy, and acceptance criteria).
+> The popup already exists (built from the earlier prompt). These are **change
+> instructions** — paste the code block below into the GHL Studio frontend AI. Two
+> changes: (1) open it from a **button**, not a timer; (2) send the user's current
+> **scenario + target** so the emailed results include their simulated what-if and
+> the fastest-path actions.
 
 ```
-Build a "Email me my results" popup for the Identity IQ Credit Score Simulator.
+UPDATE the existing "Email me my results" popup in the Identity IQ Credit Score Simulator.
+Keep the modal's look, form, validation, success/error states, and the spam disclaimer as they
+are. Make ONLY the two changes below.
 
-STACK / WHERE IT LIVES
-- React 18 + TypeScript + Vite + Tailwind CSS + shadcn/ui (Radix). A <Dialog> component
-  already exists at src/components/ui/dialog.tsx — use it.
-- Render the popup from src/components/SimulatorScreen.tsx (the results/simulator screen,
-  "Step 3"). That component already receives a `reportId: string` prop and defines
-  `const BASE_URL = "https://gatekeeper-gold.vercel.app"`. Reuse both.
-- Create a new component src/components/ResultsEmailModal.tsx and mount it from SimulatorScreen.
+CHANGE 1 — OPEN FROM A BUTTON, NOT A TIMER
+- REMOVE the auto-show behavior entirely: delete the 30-second timer, the 45-second fallback
+  timer, and the "resultsEmailPromptShown" sessionStorage auto-show guard. The popup must NOT
+  appear on its own anymore.
+- Instead, add a button that opens the popup. Place the SAME button on both result cards, so it
+  is available wherever the user is looking:
+    (a) the "Your Simulation Summary" card (shown after the user makes what-if changes), and
+    (b) the "Fastest Path" result card (shown after they tap "Show My Fastest Path to …").
+  Button label: "📧 Email me these results". Style it as a clear secondary/emerald button that
+  fits each card. Clicking it opens the existing modal.
+- Optional but recommended: also show the same button in the bottom action row (near "Reset All"
+  / "New Report") so a user who never opened either card can still request the email.
+- The modal stays fully dismissible (X, "No thanks", backdrop, Esc) and closing never disturbs
+  the simulator. No once-per-session lockout is needed anymore — they open it on demand.
 
-WHAT IT DOES
-The user has just seen their credit results on screen. ~30 seconds later, a popup invites them
-to get those results by email. Submitting sends their email to the backend, which emails them
-their analysis + recommended actions (and asks for feedback). It is a value-add, never a gate.
+CHANGE 2 — SEND THE CURRENT SCENARIO + TARGET SO THE EMAIL MATCHES THE SCREEN
+When the user submits their email, expand the POST body so the backend can render the email with
+their live what-if AND the fastest-path steps. POST to the same endpoint:
 
-WHEN IT APPEARS (timing)
-- Start a 30-second timer the first time the user has clearly "seen value" on the simulator
-  screen. Trigger that timer on the FIRST of these two signals in SimulatorScreen:
-    (a) the "Fastest Path" result card renders (the `bestPath` state becomes non-null), OR
-    (b) the simulation summary becomes visible (the `showFloatingSummary` condition becomes true).
-- FALLBACK: if neither happens, show the popup 45 seconds after the simulator screen mounts
-  (the 3-bureau scores are visible immediately, so there is always value on screen).
-- Show it AT MOST ONCE per session. Guard with sessionStorage key "resultsEmailPromptShown".
-  Once shown (or dismissed, or submitted), never auto-show again this session.
-- Clear any pending timers on unmount.
+    POST `${BASE_URL}/api/report-email`
+    headers: { "Content-Type": "application/json" }
+    body: JSON.stringify({
+      reportId,
+      email,
+      scenario,          // the SAME scenario object the app already builds for POST /api/simulate
+      bestPathTarget     // the numeric fastest-path target the app already uses (e.g. 700 or 850)
+    })
 
-CONTENT / COPY (audience is business owners aged 50–70 — plain, warm, large)
-- Title:    "Want a copy of your results?"
-- Body:     "Enter your email and we'll send your full 3-bureau analysis and your personalized
-             recommended actions — free. No spam, unsubscribe anytime."
-- One email text input, labeled "Your email address", placeholder "you@example.com", type="email".
-- Primary button:   "Email me my results"
-- Secondary action: a "No thanks" text button that closes the popup.
-- Spam disclaimer, shown as smaller helper text under the button (but still >= 15px):
-    "📩 Tip: our email may land in your Spam, Junk, or Promotions folder. Please move it to your
-     inbox and mark it 'Not spam' so we can reach you."
+- `scenario` is exactly what the app currently sends to /api/simulate — reuse that builder
+  (the one that returns { payDown, factorChanges } from the current on-screen selections). Send
+  the CURRENT state at click time. Its shape (for reference — do not rebuild if you already have it):
+      {
+        payDown: [ { accountId: string, targetUtilizationPct?: number, amount?: number } ],
+        factorChanges: {
+          paymentOnTimePct?: { from: number, to: number },   // fractions, e.g. 0.90
+          lengthYears?:      { from: number, to: number },
+          creditMixTypes?:   { from: number, to: number },
+          recentInquiries?:  { from: number, to: number },
+          utilizationPct?:   { to: number }
+        }
+      }
+  If the user hasn't made any what-if changes, send the empty/current scenario as-is — the
+  backend handles an empty scenario (it just omits the "what-if" section).
+- `bestPathTarget` is the number the app already computes for the "Show My Fastest Path to N"
+  button (700 when the three-bureau average is under 700, otherwise 850). Send that same value.
+  If it isn't computed yet at click time, omit the field — the backend defaults with the same rule.
 
-BEHAVIOR ON SUBMIT
-- Validate the email client-side (simple format check). If invalid, show an inline message
-  "Please enter a valid email address." and do not call the API.
-- On valid submit, set a loading state (disable the button, show a spinner/label like "Sending…")
-  and POST:
-      POST `${BASE_URL}/api/report-email`
-      headers: { "Content-Type": "application/json" }
-      body: JSON.stringify({ reportId, email })
-- Response contract:
-      200 { ok: true }               -> SUCCESS
-      200 { ok: true, mock: true }   -> SUCCESS (treat identically)
-      4xx/5xx or { ok: false } or a network error -> ERROR
-- SUCCESS state: replace the form with a confirmation:
-      "✓ Sent! Check your inbox in a few minutes — and please peek in your Spam/Promotions folder
-       just in case." Auto-close after ~4 seconds, or on a "Done" button.
-- ERROR state: keep the popup open, keep the entered email, show:
-      "We couldn't save your email. Please try again." and re-enable the button so they can retry.
+RESPONSE HANDLING — unchanged
+    200 { ok: true }  (or { ok: true, mock: true })  -> SUCCESS state (confirmation + spam reminder)
+    4xx/5xx, { ok: false }, or network error         -> ERROR state (keep modal open, allow retry)
 
-DISMISS / NON-BLOCKING
-- The popup is DISMISSIBLE: an X in the corner, "No thanks", clicking the backdrop, and the Esc key
-  all close it. Closing must NOT affect the simulator — the results stay fully interactive behind it.
-- Closing (any way) sets the sessionStorage guard so it won't reappear this session.
-
-DESIGN / ACCESSIBILITY
-- Match the existing design system: deep-navy surface (#0c2340), crisp white/near-white text,
-  emerald-green primary button (same as other CTAs). Rounded corners, soft shadow, comfortable padding.
-- Minimum 18px body text; 20px title+. Large tap targets (button height ~48px+). High contrast.
-- Accessible modal: focus is trapped inside while open, focus returns to the page on close, the
-  dialog has an aria-label/aria-labelledby, and the email input has an associated <label>.
-- Mobile-friendly: full-width on small screens, max-width ~480px on desktop, never overflows.
-
-ACCEPTANCE CRITERIA
-1. On a normal run, the popup appears ~30s after the Fastest Path card or summary shows (else 45s after mount).
-2. It appears at most once per browser session.
-3. Submitting a valid email calls POST /api/report-email with { reportId, email } and shows the success state on { ok: true }.
-4. Invalid email is caught client-side; API/network errors show the retry message and keep the popup open.
-5. X, "No thanks", backdrop click, and Esc all close it without disturbing the simulator, and prevent it re-showing this session.
-6. All text >= 18px (helper text >= 15px), navy/emerald theme, keyboard- and screen-reader-accessible.
-
-Do NOT change any existing simulator logic, API calls, or the analyze/simulate/best-path flow.
-Only add the popup component and the minimal wiring in SimulatorScreen to mount it and trigger the timers.
+DO NOT change any other simulator logic, the analyze/simulate/best-path calls, or the modal's
+copy and styling. Only: replace the timed trigger with the button(s), and expand the submit body
+with `scenario` and `bestPathTarget`.
 ```
+
+---
+
+## Backend contract (already deployed-ready, for reference)
+
+`POST /api/report-email` accepts `{ reportId, email, scenario?, bestPathTarget? }`:
+- Recomputes the what-if (`simulate`) and fastest path (`buildBestPath`) **server-side** from the
+  persisted facts + the forwarded `scenario`/`bestPathTarget`, so the email matches the screen.
+- Refreshes the `credit_actions_html` custom field on the contact with: snapshot (scores + reason
+  codes) → the user's simulated what-if (actions + per-bureau score changes) → fastest-path steps.
+- Attaches the email to the contact and applies the `credit-results-optin` tag (GHL workflow trigger).
+- `scenario` and `bestPathTarget` are both optional; missing/empty just drops the what-if section
+  and defaults the target with the same 700/850 rule.

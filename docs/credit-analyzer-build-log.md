@@ -377,8 +377,34 @@ To keep OTP SMS out of the main inbox: apply a distinct **`credit-simulator`** t
 **Open / follow-ups:**
 - Add `CREDIT_RESULTS_OPTIN_TAG` to `.env.example`.
 - **GHL config (user):** build the workflow (trigger = tag `credit-results-optin` → the single results+feedback email), and confirm the `credit_actions_html` field key slugifies to `credit_actions_html`. **Deliverability pre-flight** (SPF/DKIM/DMARC + monitored from/reply-to) is required since mail currently spams — see plan §6.
-- **Frontend:** build the results-email popup (prompt handed to the GHL Frontend AI) — 30s-after-value timing, email field, spam disclaimer, `POST /api/report-email`.
+- **Frontend:** build the results-email popup (prompt handed to the GHL Frontend AI) — email field, spam disclaimer, `POST /api/report-email`.
 - Live validation: real analysis → popup → submit → contact gets email + `credit-results-optin` → workflow email lands (test Gmail + Outlook) → reply shows in Conversations.
+
+### 2026-08-12 — Results email: button trigger + include simulated what-if & fastest path
+
+**Ask (client):** open the results popup from a **button** on the summary / fastest-path card (not a timed auto-popup), and make the emailed results include **the user's simulated actions + score changes** AND **the fastest-path actions + score changes** (not just an analyze-time snapshot).
+
+**Key problem:** the user's live what-if is ephemeral client state (from `/api/simulate`), invisible to the backend at analyze time. Solution: the frontend forwards the current `scenario` + `bestPathTarget`; `/api/report-email` **recomputes server-side** (same engine, same inputs) so the email matches the screen — no trusting client-rendered HTML.
+
+**Changed (all additive; BAT untouched):**
+- **`lib/results-html.ts`** (new) — shared HTML renderer. `buildActionsHtml(raw, bestPath)` (snapshot + fastest path, used by analyze CRM sync) and `buildResultsEmailHtml(raw, bestPath, sim?, simActions)` (adds the user's what-if: toggled changes + per-bureau base→estimated). Composable section renderers; inline-styled, HTML-escaped.
+- **`lib/crm-mapping.ts`** — moved the HTML builder out to `results-html.ts` (imports `buildActionsHtml`); analyze-time behavior unchanged.
+- **`app/api/report-email/route.ts`** — now accepts `{ reportId, email, scenario?, bestPathTarget? }`. Loads `report_analysis.extracted` → `toAnalysis` → `simulate(scenario)` (if the scenario has changes) + `buildBestPath(target)` (target from client or the 700/850 rule) → renders `credit_actions_html` → `resolveContactCustomFields` (best-effort) → upsert email + custom field → apply `credit-results-optin` tag. Mock-safe; graceful fallback to the analyze-time field if the analysis row or custom-field scope is missing.
+- **`docs/results-popup-frontend-prompt.md`** — rewritten as an UPDATE prompt for the GHL Frontend AI: replace the timer with a "📧 Email me these results" button on both cards, and expand the submit body with `scenario` + `bestPathTarget`.
+
+**Verified:** `tsc --noEmit` clean. BAT untouched.
+
+**Open / follow-ups:** hand the updated prompt to the GHL Frontend AI; then live-validate that a manual what-if + fastest path both render correctly in the received email.
+
+### 2026-08-12 — Fix: email showed only fastest path, not the Simulation Summary
+
+**Symptom:** received email rendered only the fastest-path section — the simulated summary was missing.
+
+**Cause:** the summary section is driven by the user's `scenario`. It renders only when the frontend forwards one; the fastest path is always computed, so it always showed. Two ways to be summary-less: (a) deployed backend predates the report-email enrichment, or (b) the frontend "Email me" button still POSTs only `{ reportId, email }`.
+
+**Fix (`app/api/report-email/route.ts`):** made the Simulation Summary **always render whenever a viable path exists** — if no manual `scenario` is forwarded, fall back to summarizing the **fastest-path scenario** (`simulate(input, { payDown: bestPath.scenario.payDown })`). So the email now shows BOTH a summary (per-bureau base→estimated) and the step-by-step fastest path regardless of what the frontend sends. Also renamed the heading "Your simulated what-if" → **"Your Simulation Summary"** (`lib/results-html.ts`) to match client wording.
+
+**Verified:** `tsc` clean. **⚠️ Requires redeploy** — the live symptom will persist until gatekeeper is redeployed with this code. If the frontend also forwards the user's manual `scenario`, the summary reflects their own toggles instead of the fastest-path fallback.
 
 ---
 
