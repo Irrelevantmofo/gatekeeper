@@ -140,8 +140,9 @@ export function buildResultsEmailHtml(
   simActions: string[] = [],
 ): string {
   const simSection = sim ? renderSimulated(sim, simActions) : ""
-  // Divider between the Simulation Summary and the fastest-path section (only when
-  // the summary is present, so there's never a stray rule).
-  const middle = simSection ? simSection + DIVIDER : ""
+  // Fence the Simulation Summary with a divider on each side — between the snapshot
+  // ("What's holding your score back") and the summary, and between the summary and
+  // the fastest-path section. Only when the summary is present, so no stray rules.
+  const middle = simSection ? DIVIDER + simSection + DIVIDER : ""
   return wrap(renderSnapshot(raw) + middle + renderFastestPath(bestPath))
 }
