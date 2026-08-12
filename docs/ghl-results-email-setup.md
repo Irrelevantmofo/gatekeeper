@@ -97,29 +97,33 @@ CAN-SPAM footer + **unsubscribe** link are appended. Keep the footer minimal.
 Our stored `credit_actions_html` is already a styled `<div>…</div>` (scores → what's holding you
 back → your simulated what-if → fastest path). This shell wraps it with the greeting + feedback ask.
 
-```html
-<div style="font-family:Arial,Helvetica,sans-serif;font-size:18px;line-height:1.6;color:#0c2340;max-width:640px;margin:0 auto;padding:8px">
-  <p style="margin:0 0 16px">Hi {{contact.first_name}},</p>
+Designed for a **60+ audience**: minimum 20px text, high contrast (dark navy on white), generous
+spacing, large tap-friendly reply ask. All inline-styled (email-safe).
 
-  <p style="margin:0 0 16px">Thanks for using our free Credit Score Simulator. Here's what we found
-  in your report — and the fastest way to raise your score:</p>
+```html
+<div style="font-family:Arial,Helvetica,sans-serif;font-size:20px;line-height:1.7;color:#0c2340;max-width:600px;margin:0 auto;padding:12px">
+  <p style="font-size:20px;margin:0 0 18px">Hi {{contact.first_name}},</p>
+
+  <p style="font-size:20px;margin:0 0 18px">Thanks for using our free Credit Score Simulator. Here's
+  what we found in your report — and the fastest way to raise your score:</p>
 
   <!-- Personalized analysis: scores, what's holding you back, your what-if, fastest path -->
   {{ contact.credit_actions_html }}
 
-  <div style="border-top:1px solid #dfe3e8;margin:24px 0"></div>
+  <div style="border-top:2px solid #c9d2dd;margin:28px 0"></div>
 
-  <p style="margin:0 0 8px;font-size:20px;font-weight:bold">Two quick questions — just hit reply:</p>
-  <ol style="margin:0 0 16px;padding-left:22px">
-    <li style="margin-bottom:6px">On a scale of <strong>1 to 5</strong>, how helpful was this?</li>
-    <li>What's one thing we could do to improve it?</li>
+  <p style="margin:0 0 12px;font-size:23px;font-weight:bold">Two quick questions — just hit reply:</p>
+  <ol style="margin:0 0 18px;padding-left:26px">
+    <li style="font-size:20px;line-height:1.6;margin:0 0 14px">On a scale of <strong>1 to 5</strong>, how helpful was this?</li>
+    <li style="font-size:20px;line-height:1.6">What's one thing we could do to improve it?</li>
   </ol>
-  <p style="margin:0 0 16px">Even a one-word reply helps us a lot — thank you!</p>
+  <p style="font-size:20px;margin:0 0 18px">Even a one-word reply helps us a lot — thank you!</p>
 
-  <p style="margin:0 0 4px">— [Your Name], Credit CRB</p>
+  <p style="font-size:20px;margin:0 0 4px">— [Your Name], Credit CRB</p>
 
-  <p style="margin:16px 0 0;font-size:15px;color:#5a6b82">P.S. If this landed in your Spam, Junk, or
-  Promotions folder, please drag it to your inbox and mark it "Not spam" so we can reach you next time.</p>
+  <p style="margin:18px 0 0;font-size:20px;line-height:1.6;color:#33475b">P.S. If this landed in your
+  Spam, Junk, or Promotions folder, please drag it to your inbox and mark it "Not spam" so we can
+  reach you next time.</p>
 </div>
 ```
 
