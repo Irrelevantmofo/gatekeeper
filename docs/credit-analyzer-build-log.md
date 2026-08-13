@@ -396,6 +396,40 @@ To keep OTP SMS out of the main inbox: apply a distinct **`credit-simulator`** t
 
 **Open / follow-ups:** hand the updated prompt to the GHL Frontend AI; then live-validate that a manual what-if + fastest path both render correctly in the received email.
 
+### 2026-08-13 — Built: encrypted-PDF results delivery, backend-sent, SMS password (Option 2)
+
+**Final design (supersedes the DOB-password idea below):** deliver the analysis as a **password-protected PDF**; the password is a **random code texted via SMS** (out-of-band — best practice), NOT the DOB. So DOB extraction was **reverted** (data-minimization restored — name is again the only PII). The backend **sends the email itself** via the GHL Conversations API with the PDF **attached** (Option 2); reply-tracking is a separate GHL "Customer Replied" workflow.
+
+**Why backend-sends:** GHL workflow "Send Email" supports only STATIC attachments — no per-contact dynamic PDF. The Conversations API (`POST /conversations/messages`, type Email) DOES accept `attachments` (HTTPS URLs), so the backend sends it. The email threads into Conversations, so a reply still fires the "Customer Replied" trigger for the next automation.
+
+**Built (all additive; BAT untouched):**
+- **Dep:** `pdfkit@0.19.1` + `@types/pdfkit` (installed with **pnpm 9.15.9** — corepack's default pnpm 11 drops the `overrides:` block; verified lockfile keeps `overrides: hono 4.12.25` + `--frozen-lockfile` passes). `next.config.mjs` → `serverExternalPackages: ["unpdf","pdfkit"]` (AFM font data must load from node_modules at runtime).
+- **`lib/results-pdf.ts`** (new) — `buildResultsPdf({raw,sim,simActions,bestPath}, password)` → encrypted PDF Buffer (pdfkit, PDF 1.7/AES, `userPassword`). Sections: snapshot, "what's holding your score back", Simulation Summary (base→estimated), fastest path, disclaimer.
+- **`lib/ghl.ts`** — `sendGhlEmail({contactId,subject,html,attachments,emailFrom,replyTo})` via Conversations API (needs `conversations/message.write` scope — already added for OTP).
+- **`app/api/report-email/route.ts`** — rewritten: recompute sim + best-path → generate password → build encrypted PDF → upload to `credit-reports/results/{id}.pdf` → 1h signed URL → upsert email onto contact → `sendGhlEmail` with the PDF attached → `sendGhlSms` password → apply `credit-results-optin` tag. Email body is code-built (no scores inline): "results attached, password texted" + the feedback questions (reply). Mock-safe. Returns `{ ok, sent, smsSent }`.
+- **`.env.example`** — `CREDIT_EMAIL_FROM`, `CREDIT_EMAIL_REPLYTO`.
+
+**Verified:** `tsc --noEmit` clean; `--frozen-lockfile` passes.
+
+**Open / needs live test (can't verify in this env):**
+- pdfkit font rendering on Vercel (the AFM issue) — validate a real send; if it errors, vendor/embed a TTF.
+- Conversations API email field names (`attachments`/`emailFrom`/`replyTo`) + that GHL fetches the signed URL before it expires (1h TTL).
+- Results PDF retention: currently left in `results/` — add a Phase-4 sweep to delete it.
+- SMS DND edge (build log 2026-08-11): if the password SMS fails, `smsSent:false` is returned; decide a fallback (e.g., show/allow resend).
+- **GHL (user):** build the **"Customer Replied" (Email)** workflow → next automation. Deliverability DNS (SPF/DKIM/DMARC) still required.
+
+### 2026-08-13 — Decision: deliver results as a DOB-password-protected PDF (reverses DOB minimization) [SUPERSEDED — see entry above; DOB reverted, password now via SMS]
+
+**Client decision:** to avoid emailing credit scores in the body (GLBA/FTC Safeguards — NPI must be encrypted in transit), deliver the analysis as a **password-protected PDF**, password = the consumer's **date of birth**. Frontend consent will disclose that report details (incl. DOB) are used for password protection.
+
+**Compliance note (recorded, accepted by client):** this **reverses** the plan's data-minimization stance (§7.5/§9.3/§17.2 "do NOT extract DOB"). DOB now flows through the LLM (OpenRouter — compliance still deferred, §16 item 17) and is used transiently as the PDF password. DOB is **not** persisted in Supabase and **not** synced to the CRM. Legally defensible with the consumer's authorization (FCRA permissible purpose) + explicit consent; DOB is a weak password but an accepted convention (banks). Research: [Virtru bank email encryption 2026], [FTC Safeguards], [FCRA §1681b].
+
+**Done this step:** DOB extraction — `consumer_dob` (ISO `YYYY-MM-DD`) added to `RawExtraction` type + strict schema (`required`) + system prompt (extract name **and** DOB only; still exclude SSN/address/employers) + mock (`1968-03-15`). `tsc` clean.
+
+**Delivery design (to build):** the email must **stop showing scores in the body** — instead it links to the encrypted PDF and says "open with your date of birth." Backend (`/api/report-email`) generates the PDF (pdfkit, AES via PDF 1.7, `userPassword` = DOB `MMDDYYYY`), uploads to Supabase Storage, writes a signed URL to a new GHL custom field `credit_report_pdf_url` + a `credit_pdf_password_hint` field; GHL email links it. `credit_actions_html` content moves into the PDF.
+
+**Pending / needs decisions:** add `pdfkit` dep (+ serverless font handling — embed a TTF or apply the Next.js AFM fix); new GHL custom fields (`credit_report_pdf_url`, `credit_pdf_password_hint`); PDF retention sweep; live test (PDF gen can't be verified in this env). DOB format normalization (→ `MMDDYYYY`) + missing-DOB fallback (password hint field).
+
 ### 2026-08-12 — Fix: email showed only fastest path, not the Simulation Summary
 
 **Symptom:** received email rendered only the fastest-path section — the simulated summary was missing.

@@ -1,81 +1,87 @@
-# Prompt for the GHL Frontend AI — UPDATE the "Email me my results" popup
+# Prompt for the GHL Frontend AI — Results email popup (consolidated spec)
 
-> The popup already exists (built from the earlier prompt). These are **change
-> instructions** — paste the code block below into the GHL Studio frontend AI. Two
-> changes: (1) open it from a **button**, not a timer; (2) send the user's current
-> **scenario + target** so the emailed results include their simulated what-if and
-> the fastest-path actions.
+> Paste the code block below into the GHL Studio frontend AI. It is the full, current spec for the
+> "Email me my results" flow: button-triggered, sends the user's scenario, discloses the
+> password-protected-PDF delivery, and is styled for a 60+ audience.
 
 ```
-UPDATE the existing "Email me my results" popup in the Identity IQ Credit Score Simulator.
-Keep the modal's look, form, validation, success/error states, and the spam disclaimer as they
-are. Make ONLY the two changes below.
+Build/UPDATE the "Email me my results" flow in the Identity IQ Credit Score Simulator to match this
+complete spec. If a popup already exists, modify it to conform. Do not change the analyze / simulate
+/ best-path logic.
 
-CHANGE 1 — OPEN FROM A BUTTON, NOT A TIMER
-- REMOVE the auto-show behavior entirely: delete the 30-second timer, the 45-second fallback
-  timer, and the "resultsEmailPromptShown" sessionStorage auto-show guard. The popup must NOT
-  appear on its own anymore.
-- Instead, add a button that opens the popup. Place the SAME button on both result cards, so it
-  is available wherever the user is looking:
-    (a) the "Your Simulation Summary" card (shown after the user makes what-if changes), and
-    (b) the "Fastest Path" result card (shown after they tap "Show My Fastest Path to …").
-  Button label: "📧 Email me these results". Style it as a clear secondary/emerald button that
-  fits each card. Clicking it opens the existing modal.
-- Optional but recommended: also show the same button in the bottom action row (near "Reset All"
-  / "New Report") so a user who never opened either card can still request the email.
-- The modal stays fully dismissible (X, "No thanks", backdrop, Esc) and closing never disturbs
-  the simulator. No once-per-session lockout is needed anymore — they open it on demand.
+CONTEXT
+- The tool shows a 3-bureau credit simulator. `SimulatorScreen` already holds `reportId` and
+  `const BASE_URL = "https://gatekeeper-gold.vercel.app"`. Reuse both.
+- After the user views/adjusts their results, they can email themselves a copy. The backend emails a
+  SECURE, PASSWORD-PROTECTED PDF (results are NOT shown in the email body). The password is a random
+  code that we TEXT to the user's verified phone (out-of-band) — the user does NOT set or type it.
 
-CHANGE 2 — SEND THE CURRENT SCENARIO + TARGET SO THE EMAIL MATCHES THE SCREEN
-When the user submits their email, expand the POST body so the backend can render the email with
-their live what-if AND the fastest-path steps. POST to the same endpoint:
+1) TRIGGER — a button, NOT a timer
+- Remove any auto-show timer / sessionStorage auto-open behavior. The popup opens only on click.
+- Add a button labeled "📧 Email me these results" on BOTH result cards, wherever the user is:
+    (a) the "Your Simulation Summary" card, and
+    (b) the "Fastest Path" result card.
+  Optional: also add it in the bottom action row so it's reachable without opening either card.
+- The popup is fully dismissible (X, "No thanks", backdrop click, Esc) and closing never disturbs
+  the simulator behind it.
 
-    POST `${BASE_URL}/api/report-email`
-    headers: { "Content-Type": "application/json" }
-    body: JSON.stringify({
-      reportId,
-      email,
-      scenario,          // the SAME scenario object the app already builds for POST /api/simulate
-      bestPathTarget     // the numeric fastest-path target the app already uses (e.g. 700 or 850)
-    })
+2) POPUP CONTENT (plain-English, 60+ audience)
+- Title: "Want a copy of your results?"
+- Body: "Enter your email and we'll send your full 3-bureau analysis and your personalized
+  recommended actions as a secure, password-protected PDF — free."
+- One email input, labeled "Your email address", type="email".
+- Primary button: "Email me my results".  Secondary: "No thanks" (closes).
+- Password/PDF disclosure note under the field:
+  "For your privacy we send the results as a password-protected PDF, and we'll TEXT you the password
+   on your verified phone. Open the attached PDF with that code."
+- Spam disclosure note:
+  "📩 Our email may land in your Spam, Junk, or Promotions folder. Please move it to your inbox and
+   mark it 'Not spam' so we can reach you."
 
-- `scenario` is exactly what the app currently sends to /api/simulate — reuse that builder
-  (the one that returns { payDown, factorChanges } from the current on-screen selections). Send
-  the CURRENT state at click time. Its shape (for reference — do not rebuild if you already have it):
-      {
-        payDown: [ { accountId: string, targetUtilizationPct?: number, amount?: number } ],
-        factorChanges: {
-          paymentOnTimePct?: { from: number, to: number },   // fractions, e.g. 0.90
-          lengthYears?:      { from: number, to: number },
-          creditMixTypes?:   { from: number, to: number },
-          recentInquiries?:  { from: number, to: number },
-          utilizationPct?:   { to: number }
+3) SUBMIT — send the current scenario + target
+- Validate the email client-side; if invalid show "Please enter a valid email address." and don't call the API.
+- On valid submit, POST:
+      POST `${BASE_URL}/api/report-email`
+      headers: { "Content-Type": "application/json" }
+      body: JSON.stringify({ reportId, email, scenario, bestPathTarget })
+  - `scenario` = the EXACT object the app already builds for POST /api/simulate (the builder that
+    returns { payDown, factorChanges } from the current on-screen selections). Capture current state
+    at click time. Shape (reuse the existing builder, don't reinvent):
+        {
+          payDown: [ { accountId: string, targetUtilizationPct?: number, amount?: number } ],
+          factorChanges: {
+            paymentOnTimePct?: { from: number, to: number },   // fractions, e.g. 0.90
+            lengthYears?:      { from: number, to: number },
+            creditMixTypes?:   { from: number, to: number },
+            recentInquiries?:  { from: number, to: number },
+            utilizationPct?:   { to: number }
+          }
         }
-      }
-  If the user hasn't made any what-if changes, send the empty/current scenario as-is — the
-  backend handles an empty scenario (it just omits the "what-if" section).
-- `bestPathTarget` is the number the app already computes for the "Show My Fastest Path to N"
-  button (700 when the three-bureau average is under 700, otherwise 850). Send that same value.
-  If it isn't computed yet at click time, omit the field — the backend defaults with the same rule.
+    If the user changed nothing, send whatever the builder returns (empty is fine — backend handles it).
+  - `bestPathTarget` = the number the app uses for "Show My Fastest Path to N" (700 if the 3-bureau
+    average is under 700, else 850). If not available at click time, omit the field (do not send null).
 
-RESPONSE HANDLING — unchanged
-    200 { ok: true }  (or { ok: true, mock: true })  -> SUCCESS state (confirmation + spam reminder)
-    4xx/5xx, { ok: false }, or network error         -> ERROR state (keep modal open, allow retry)
+4) RESPONSE HANDLING
+    200 { ok: true }  (or { ok: true, mock: true })  -> SUCCESS: replace the form with
+        "✓ Sent! Check your inbox in a few minutes (and your Spam/Promotions folder). We've texted
+         the password to open the PDF." If the response has smsSent === false, instead say
+        "✓ Sent! We couldn't text your password — please call us at 855-291-7557 to get it."
+        Auto-close after ~6s or on "Done".
+    4xx/5xx, { ok: false }, or network error -> ERROR: keep the popup open, keep the email entered,
+        show "We couldn't email your results. Please try again." and re-enable the button.
 
-DO NOT change any other simulator logic, the analyze/simulate/best-path calls, or the modal's
-copy and styling. Only: replace the timed trigger with the button(s), and expand the submit body
-with `scenario` and `bestPathTarget`.
+5) CONSENT SCREEN DISCLOSURE (upload/consent step)
+- Near the existing consent checkbox, add a plain-language line:
+  "To keep your information private, we email your results as a password-protected PDF and text the
+   password to your phone — so only you can open it."
+
+6) DESIGN / ACCESSIBILITY (audience is 60+)
+- Minimum 18px text everywhere (helper/disclosure text also >= 18px). Titles 22px+.
+- High contrast: deep-navy surface (#0c2340), crisp white text, emerald-green primary button.
+- Large tap targets (buttons >= 48px tall). Generous spacing.
+- Accessible modal: focus trapped while open, focus returns on close, dialog has aria-label, the
+  email input has an associated <label>. Mobile-friendly: full-width on small screens, max-width
+  ~480px on desktop, never overflows horizontally.
+
+Do NOT change any other simulator logic or the analyze/simulate/best-path calls.
 ```
-
----
-
-## Backend contract (already deployed-ready, for reference)
-
-`POST /api/report-email` accepts `{ reportId, email, scenario?, bestPathTarget? }`:
-- Recomputes the what-if (`simulate`) and fastest path (`buildBestPath`) **server-side** from the
-  persisted facts + the forwarded `scenario`/`bestPathTarget`, so the email matches the screen.
-- Refreshes the `credit_actions_html` custom field on the contact with: snapshot (scores + reason
-  codes) → the user's simulated what-if (actions + per-bureau score changes) → fastest-path steps.
-- Attaches the email to the contact and applies the `credit-results-optin` tag (GHL workflow trigger).
-- `scenario` and `bestPathTarget` are both optional; missing/empty just drops the what-if section
-  and defaults the target with the same 700/850 rule.

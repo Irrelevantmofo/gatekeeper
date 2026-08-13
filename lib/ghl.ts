@@ -295,3 +295,40 @@ export async function addUsedTag(contactId: string, token: string): Promise<void
     throw new Error(`GHL add tag failed (${res.status}): ${detail}`)
   }
 }
+
+// Send an email to a contact via the GHL Conversations API. The message threads
+// into the contact's Conversation (so replies fire the "Customer Replied" trigger
+// for the feedback-loop automation) and `attachments` are HTTPS URLs GHL fetches
+// and attaches. Requires the token scope `conversations/message.write`.
+// (Verify the exact field names against current GHL docs if this ever 4xxs.)
+export async function sendGhlEmail(
+  params: { contactId: string; subject: string; html: string; attachments?: string[]; emailFrom?: string; replyTo?: string },
+  token: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const body: Record<string, unknown> = {
+    type: "Email",
+    contactId: params.contactId,
+    subject: params.subject,
+    html: params.html,
+  }
+  if (params.attachments?.length) body.attachments = params.attachments
+  if (params.emailFrom) body.emailFrom = params.emailFrom
+  if (params.replyTo) body.replyTo = params.replyTo
+
+  const res = await fetch(`${GHL_BASE_URL}/conversations/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Version: GHL_API_VERSION,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  })
+  if (!res.ok) {
+    const detail = await res.text()
+    return { ok: false, error: `GHL email send failed (${res.status}): ${detail.slice(0, 300)}` }
+  }
+  return { ok: true }
+}
