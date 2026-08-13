@@ -89,12 +89,12 @@ function buildEmailHtml(firstName: string | null): string {
       <tr><td style="padding:28px 30px 10px;color:#0c2340;font-size:18px;line-height:1.7">
         <p style="margin:0 0 18px">${hi}</p>
         <p style="margin:0 0 18px">Thanks for using our free Credit Score Simulator. Your full results are ready — your 3-bureau scores and the exact steps to raise them.</p>
-        <p style="margin:0 0 12px">To keep your information private, your results are in the <strong>attached file (a PDF)</strong> that opens with a password.</p>
+        <p style="margin:0 0 12px"><strong>🔒 Your results are protected for your security.</strong> Because your report contains private financial information, we locked it in a PDF and <strong>sent a one-time security code to your cell phone by text message</strong> — so that only you can open it.</p>
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef2f7;border:1px solid #d7dee8;border-radius:10px;margin:0 0 18px">
           <tr><td style="padding:18px 22px;color:#0c2340;font-size:18px;line-height:1.7">
             <p style="margin:0 0 12px;font-weight:bold;font-size:19px">How to open your results — 3 easy steps:</p>
             <p style="margin:0 0 10px"><strong>1.</strong> Tap the attached file below (it's called "Credit Score Analysis").</p>
-            <p style="margin:0 0 10px"><strong>2.</strong> A box will pop up asking for a password. <strong>Type the code we just texted to your phone.</strong></p>
+            <p style="margin:0 0 10px"><strong>2.</strong> A box will pop up asking for a password. <strong>Enter the security code we texted to your cell phone.</strong></p>
             <p style="margin:0"><strong>3.</strong> Your results will open. That's it!</p>
           </td></tr>
         </table>
