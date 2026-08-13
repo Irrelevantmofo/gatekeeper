@@ -158,6 +158,12 @@ function normalizePaydowns(input: SimInput, items: NonNullable<SimScenario["payD
   })
 }
 
+// Total dollars a scenario's paydowns require (factor changes cost nothing).
+// Uses the same normalization as simulate(), so the figure matches the engine.
+export function scenarioCashTotal(input: SimInput, scenario: SimScenario): number {
+  return normalizePaydowns(input, scenario.payDown ?? []).reduce((sum, x) => sum + x.amount, 0)
+}
+
 // Core: recompute each bureau's estimated score from the scenario.
 export function simulate(input: SimInput, scenario: SimScenario): SimResult {
   const W = VANTAGESCORE_3_WEIGHTS

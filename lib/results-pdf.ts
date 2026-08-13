@@ -62,12 +62,13 @@ export interface ResultsPdfInput {
   raw: RawExtraction
   sim: SimResult | null
   simActions: string[]
+  simCashTotal: number // dollars the simulated paydowns require (0 if none)
   bestPath: BestPathResult
 }
 
 // Generate the encrypted PDF as a Buffer. `password` is the user (open) password.
 export async function buildResultsPdf(input: ResultsPdfInput, password: string): Promise<Buffer> {
-  const { raw, sim, simActions, bestPath } = input
+  const { raw, sim, simActions, simCashTotal, bestPath } = input
   const logo = await getLogoBuffer() // best-effort; PDF still renders without it
 
   return new Promise<Buffer>((resolve, reject) => {
@@ -159,6 +160,10 @@ export async function buildResultsPdf(input: ResultsPdfInput, password: string):
         doc.moveDown(0.2)
         simActions.forEach((a) => bullet(a))
         doc.moveDown(0.3)
+      }
+      if (simCashTotal > 0) {
+        doc.font("Helvetica-Bold").fontSize(13).fillColor(NAVY).text(`Total cash to get there: $${Math.round(simCashTotal).toLocaleString()}`)
+        doc.moveDown(0.4)
       }
       body("Your projected scores with those changes:")
       doc.moveDown(0.2)

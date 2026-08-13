@@ -5,7 +5,7 @@ import { CREDIT_REPORTS_BUCKET, getSupabaseAdmin } from "@/lib/supabase"
 import { applyCreditResultsOptinTag, CREDIT_CONTACT_SOURCE, useMockExtraction } from "@/lib/credit"
 import { normalizeUsPhone, sendGhlSms } from "@/lib/otp"
 import { toAnalysis, type RawExtraction } from "@/lib/credit-extraction"
-import { buildBestPath, simulate, type SimScenario } from "@/lib/credit-simulator"
+import { buildBestPath, scenarioCashTotal, simulate, type SimScenario } from "@/lib/credit-simulator"
 import { buildResultsPdf } from "@/lib/results-pdf"
 
 // POST /api/report-email — the user clicked "Email me my results".
@@ -191,10 +191,11 @@ export async function POST(request: NextRequest) {
         : {}
     const sim = scenarioHasChanges(scenario) ? simulate(input, scenario) : null
     const simActions = sim ? describeScenario(input.accounts, scenario) : []
+    const simCashTotal = sim ? scenarioCashTotal(input, scenario) : 0
 
     // Encrypted PDF (random password, delivered by SMS).
     const password = generatePassword()
-    const pdf = await buildResultsPdf({ raw: extracted, sim, simActions, bestPath }, password)
+    const pdf = await buildResultsPdf({ raw: extracted, sim, simActions, simCashTotal, bestPath }, password)
 
     // Upload + short-lived signed URL for GHL to fetch as an attachment.
     // Friendly last path segment so the attachment name is good even if GHL derives
