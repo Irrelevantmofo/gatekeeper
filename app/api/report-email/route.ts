@@ -65,24 +65,47 @@ function describeScenario(accounts: { accountId: string; creditor: string }[], s
   return labels
 }
 
-// Short, personal, reply-first email body (18px+, 60+ audience). Results are in
-// the attached PDF, not here. The reply ask is what trains inbox deliverability.
+// Brand colors + logo. Logo is referenced by absolute HTTPS URL (email clients
+// can't use repo/relative images); override via CREDIT_EMAIL_LOGO_URL.
+const BRAND_BLUE = "#1b4fa1"
+const LOGO_URL =
+  process.env.CREDIT_EMAIL_LOGO_URL ||
+  "https://assets.cdn.filesafe.space/A6Ohu9Xj1Qyu1CvraT26/media/6a342c180a683b64fee5a440.png"
+// Plain address shown in the footer + used for the unsubscribe mailto (kept
+// separate from CREDIT_EMAIL_FROM, which may be a "Name <addr>" send header).
+const SUPPORT_EMAIL = process.env.CREDIT_SUPPORT_EMAIL || "office@creditcrbusa.com"
+
+// Branded, reply-first email (blue header/footer, 60+ readable body). The results
+// are in the attached password-protected PDF, not inline. Table-based layout +
+// inline styles for cross-client (Outlook) safety.
 function buildEmailHtml(firstName: string | null): string {
   const hi = firstName?.trim() ? `Hi ${firstName.trim()},` : "Hi there,"
-  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:18px;line-height:1.7;color:#0c2340;max-width:600px;margin:0 auto">
-  <p style="margin:0 0 18px">${hi}</p>
-  <p style="margin:0 0 18px">Your credit results are ready! For your privacy, we've attached them as a <strong>password-protected PDF</strong>.</p>
-  <p style="margin:0 0 18px">🔑 <strong>We just texted your password to your phone.</strong> Open the attached PDF with that code.</p>
-  <div style="border-top:2px solid #c9d2dd;margin:24px 0"></div>
-  <p style="margin:0 0 12px;font-size:20px;font-weight:bold">Two quick questions — just hit reply:</p>
-  <ol style="margin:0 0 18px;padding-left:26px">
-    <li style="margin:0 0 14px">On a scale of <strong>1 to 5</strong>, how helpful was this?</li>
-    <li>What's one thing we could do to improve it?</li>
-  </ol>
-  <p style="margin:0 0 18px">Even a one-word reply helps us a lot — thank you!</p>
-  <p style="margin:0 0 4px">— The Credit CRB Team</p>
-  <p style="margin:18px 0 0;font-size:18px;color:#33475b">P.S. If this landed in your Spam, Junk, or Promotions folder, please drag it to your inbox and mark it "Not spam" so we can reach you.</p>
-</div>`
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0;padding:0;background:#eef2f7">
+  <tr><td align="center" style="padding:0">
+    <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;background:#ffffff;font-family:Arial,Helvetica,sans-serif">
+      <tr><td style="background:${BRAND_BLUE};padding:18px 20px;text-align:center">
+        <img src="${LOGO_URL}" alt="Credit CRB" width="340" style="display:inline-block;width:340px;max-width:85%;height:auto;border:0" />
+      </td></tr>
+      <tr><td style="padding:28px 30px 10px;color:#0c2340;font-size:18px;line-height:1.7">
+        <p style="margin:0 0 18px">${hi}</p>
+        <p style="margin:0 0 18px">Thanks for using our free Credit Score Simulator. Your full results — your 3-bureau scores and the fastest way to raise them — are in the <strong>attached password-protected PDF</strong>.</p>
+        <p style="margin:0 0 18px">🔒 We've <strong>texted the password to your phone</strong>. Your email may note it couldn't scan the encrypted file — that's normal for a secure document. Just open the PDF with that code.</p>
+        <div style="border-top:1px solid #d7dee8;margin:22px 0"></div>
+        <p style="margin:0 0 14px;font-size:20px;font-weight:bold">Two quick questions — just hit reply:</p>
+        <p style="margin:0 0 12px">1. On a scale of <strong>1 to 5</strong>, how helpful was this?</p>
+        <p style="margin:0 0 18px">2. What's one thing we could do to improve it?</p>
+        <p style="margin:0 0 18px">Even a one-word reply helps us a lot — thank you!</p>
+        <p style="margin:0 0 18px">— Credit CRB</p>
+        <p style="margin:0 0 8px;font-size:16px;color:#5a6b82">P.S. If this landed in your Spam or Promotions folder, please drag it to your inbox and mark it "Not spam" so we can reach you.</p>
+      </td></tr>
+      <tr><td style="background:${BRAND_BLUE};padding:24px 30px;color:#ffffff;font-size:15px;line-height:1.6">
+        <p style="margin:0 0 4px;font-weight:bold">Our e-mail address is:</p>
+        <p style="margin:0 0 16px">${SUPPORT_EMAIL}</p>
+        <p style="margin:0">Want to change how you receive these emails?<br/>You can <a href="mailto:${SUPPORT_EMAIL}?subject=Unsubscribe" style="color:#ffffff;text-decoration:underline">unsubscribe from this list</a>.</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>`
 }
 
 export async function OPTIONS(request: NextRequest) {
@@ -174,14 +197,18 @@ export async function POST(request: NextRequest) {
     const pdf = await buildResultsPdf({ raw: extracted, sim, simActions, bestPath }, password)
 
     // Upload + short-lived signed URL for GHL to fetch as an attachment.
-    const storagePath = `${RESULTS_PREFIX}/${reportId}.pdf`
+    // Friendly last path segment so the attachment name is good even if GHL derives
+    // it from the URL rather than Content-Disposition. reportId subfolder keeps it unique.
+    const storagePath = `${RESULTS_PREFIX}/${reportId}/Credit-Score-Analysis.pdf`
     const { error: upErr } = await supabase.storage
       .from(CREDIT_REPORTS_BUCKET)
       .upload(storagePath, pdf, { contentType: "application/pdf", upsert: true })
     if (upErr) throw new Error(`PDF upload failed: ${upErr.message}`)
+    // `download` sets Content-Disposition so the email attachment is named nicely
+    // (otherwise GHL shows a generic "attached file").
     const { data: signed, error: signErr } = await supabase.storage
       .from(CREDIT_REPORTS_BUCKET)
-      .createSignedUrl(storagePath, 3600)
+      .createSignedUrl(storagePath, 3600, { download: "Credit Score Analysis.pdf" })
     if (signErr || !signed?.signedUrl) throw new Error(`Signed URL failed: ${signErr?.message ?? "none"}`)
 
     // Attach the email to the SAME contact (match by phone), get contactId.

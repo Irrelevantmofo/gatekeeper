@@ -26,6 +26,36 @@ function median(nums: number[]): number | null {
   return v.length % 2 ? v[mid] : Math.round((v[mid - 1] + v[mid]) / 2)
 }
 
+// ── Brand logo (fetched at runtime; pdfkit needs the bytes, not a URL) ─────────
+const PDF_LOGO_URL =
+  process.env.CREDIT_PDF_LOGO_URL ||
+  "https://assets.cdn.filesafe.space/A6Ohu9Xj1Qyu1CvraT26/media/6995d199b3d5f8d7d94c11ce.png"
+
+// Cached across warm invocations: undefined = not tried, null = failed.
+let logoCache: Buffer | null | undefined
+async function getLogoBuffer(): Promise<Buffer | null> {
+  if (logoCache !== undefined) return logoCache
+  try {
+    const res = await fetch(PDF_LOGO_URL)
+    logoCache = res.ok ? Buffer.from(await res.arrayBuffer()) : null
+  } catch {
+    logoCache = null
+  }
+  return logoCache
+}
+
+// Read intrinsic PNG dimensions from the IHDR chunk (to scale + advance cursor).
+function pngSize(buf: Buffer): { w: number; h: number } | null {
+  try {
+    if (buf.length >= 24 && buf.toString("ascii", 12, 16) === "IHDR") {
+      return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
 export interface ResultsPdfInput {
   raw: RawExtraction
   sim: SimResult | null
@@ -34,10 +64,11 @@ export interface ResultsPdfInput {
 }
 
 // Generate the encrypted PDF as a Buffer. `password` is the user (open) password.
-export function buildResultsPdf(input: ResultsPdfInput, password: string): Promise<Buffer> {
+export async function buildResultsPdf(input: ResultsPdfInput, password: string): Promise<Buffer> {
   const { raw, sim, simActions, bestPath } = input
+  const logo = await getLogoBuffer() // best-effort; PDF still renders without it
 
-  return new Promise((resolve, reject) => {
+  return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({
       size: "LETTER",
       margin: 54,
@@ -47,7 +78,7 @@ export function buildResultsPdf(input: ResultsPdfInput, password: string): Promi
       ownerPassword: `${password}::owner`,
       pdfVersion: "1.7",
       permissions: { printing: "highResolution", copying: true, modifying: false },
-      info: { Title: "Your Credit Results", Author: "Credit CRB" },
+      info: { Title: "Credit Score Analysis", Author: "Credit CRB" },
     })
 
     const chunks: Buffer[] = []
@@ -73,10 +104,26 @@ export function buildResultsPdf(input: ResultsPdfInput, password: string): Promi
       doc.moveDown(0.6)
     }
 
+    // ── Brand logo banner (centered, best-effort) ──────────────────────────────
+    if (logo) {
+      try {
+        const size = pngSize(logo)
+        const logoW = 240
+        const x = (doc.page.width - logoW) / 2
+        const logoH = size ? (logoW * size.h) / size.w : logoW * 0.66
+        doc.image(logo, x, doc.y, { width: logoW })
+        doc.y = doc.y + logoH + 14
+      } catch {
+        /* bad image bytes — skip the logo, keep the title */
+      }
+    }
+
     // ── Title ─────────────────────────────────────────────────────────────────
-    doc.font("Helvetica-Bold").fontSize(22).fillColor(NAVY).text("Your Credit Results")
+    const titleAlign = logo ? "center" : "left"
+    doc.font("Helvetica-Bold").fontSize(20).fillColor(NAVY).text("Credit Score Analysis", { align: titleAlign })
     doc.font("Helvetica").fontSize(11).fillColor(MUTED).text(
       `${raw.report_meta.score_model ?? "VantageScore 3.0"}${raw.report_meta.report_date ? ` · Report date ${raw.report_meta.report_date}` : ""}`,
+      { align: titleAlign },
     )
 
     // ── Snapshot ────────────────────────────────────────────────────────────────
