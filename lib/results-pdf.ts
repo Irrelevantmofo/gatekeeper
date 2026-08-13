@@ -17,6 +17,8 @@ const NAVY = "#0c2340"
 const MUTED = "#33475b"
 const RULE = "#c9d2dd"
 const GREEN = "#0a7d33"
+const BLUE = "#1b4fa1"
+const PHONE = process.env.CREDIT_SUPPORT_PHONE || "855-291-7557"
 
 const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n)
 function median(nums: number[]): number | null {
@@ -85,6 +87,7 @@ export async function buildResultsPdf(input: ResultsPdfInput, password: string):
     doc.on("data", (c: Buffer) => chunks.push(c))
     doc.on("end", () => resolve(Buffer.concat(chunks)))
     doc.on("error", reject)
+    doc.lineGap(5) // ~1.4x line spacing — a key readability lever for 60+ readers
 
     const left = doc.page.margins.left
     const right = doc.page.width - doc.page.margins.right
@@ -94,9 +97,9 @@ export async function buildResultsPdf(input: ResultsPdfInput, password: string):
       doc.moveDown(0.3)
     }
     const body = (text: string, opts: PDFKit.Mixins.TextOptions = {}) =>
-      doc.font("Helvetica").fontSize(12).fillColor(NAVY).text(text, opts)
+      doc.font("Helvetica").fontSize(14).fillColor(NAVY).text(text, opts)
     const bullet = (text: string) =>
-      doc.font("Helvetica").fontSize(12).fillColor(NAVY).text(`•  ${text}`, { indent: 6, paragraphGap: 4 })
+      doc.font("Helvetica").fontSize(14).fillColor(NAVY).text(`•  ${text}`, { indent: 6, paragraphGap: 5 })
     const divider = () => {
       doc.moveDown(0.6)
       const y = doc.y
@@ -121,7 +124,7 @@ export async function buildResultsPdf(input: ResultsPdfInput, password: string):
     // ── Title ─────────────────────────────────────────────────────────────────
     const titleAlign = logo ? "center" : "left"
     doc.font("Helvetica-Bold").fontSize(20).fillColor(NAVY).text("Credit Score Analysis", { align: titleAlign })
-    doc.font("Helvetica").fontSize(11).fillColor(MUTED).text(
+    doc.font("Helvetica").fontSize(12).fillColor(MUTED).text(
       `${raw.report_meta.score_model ?? "VantageScore 3.0"}${raw.report_meta.report_date ? ` · Report date ${raw.report_meta.report_date}` : ""}`,
       { align: titleAlign },
     )
@@ -130,10 +133,14 @@ export async function buildResultsPdf(input: ResultsPdfInput, password: string):
     const scored = raw.scores.filter((s) => finite(s.value))
     if (scored.length) {
       h("Your Credit Snapshot", 16)
-      for (const s of scored) {
-        doc.font("Helvetica").fontSize(13).fillColor(NAVY).text(`${s.bureau}:  `, { continued: true })
-        doc.font("Helvetica-Bold").fontSize(15).text(String(s.value))
-      }
+      // All three bureaus on one row: "TransUnion: 646   Experian: 643   Equifax: 639"
+      scored.forEach((s, i) => {
+        const last = i === scored.length - 1
+        const gap = i === 0 ? "" : "     "
+        doc.font("Helvetica").fontSize(14).fillColor(NAVY).text(`${gap}${s.bureau}: `, { continued: true })
+        doc.font("Helvetica-Bold").fontSize(14).text(String(s.value), { continued: !last })
+        if (!last) doc.font("Helvetica").text("    ", { continued: true })
+      })
       const mid = median(scored.map((s) => s.value).filter(finite))
       const rep = scored.find((s) => s.value === mid)?.bureau ?? scored[0]?.bureau ?? null
       const reasons = (rep ? scored.find((s) => s.bureau === rep)?.reason_codes : []) ?? []
@@ -158,9 +165,9 @@ export async function buildResultsPdf(input: ResultsPdfInput, password: string):
       for (const b of sim.perBureau) {
         const delta = b.estimatedScore - b.baseScore
         const sign = delta >= 0 ? `+${delta}` : `${delta}`
-        doc.font("Helvetica").fontSize(12).fillColor(NAVY).text(`${b.bureau}:  `, { continued: true })
-        doc.font("Helvetica-Bold").text(`${b.baseScore} → ${b.estimatedScore}  `, { continued: true })
-        doc.fillColor(delta >= 0 ? GREEN : "#b3261e").text(`(${sign} point${Math.abs(delta) === 1 ? "" : "s"})`)
+        doc.font("Helvetica").fontSize(13).fillColor(NAVY).text(`${b.bureau}:  `, { continued: true })
+        doc.font("Helvetica-Bold").text(`${b.baseScore} to ${b.estimatedScore}`, { continued: true })
+        doc.font("Helvetica-Bold").fillColor(delta >= 0 ? GREEN : "#b3261e").text(`  (${sign} point${Math.abs(delta) === 1 ? "" : "s"})`)
       }
     }
 
@@ -169,31 +176,37 @@ export async function buildResultsPdf(input: ResultsPdfInput, password: string):
     h(`Your fastest path to ${bestPath.target}`, 16)
     if (bestPath.steps.length) {
       bestPath.steps.forEach((st) => {
-        doc.font("Helvetica").fontSize(12).fillColor(NAVY).text(`${st.order}.  Pay `, { continued: true })
-        doc.font("Helvetica-Bold").text(`${st.creditor} `, { continued: true })
-        doc.font("Helvetica").text(`${st.action} — `, { continued: true })
-        doc.fillColor(GREEN).font("Helvetica-Bold").text(`+${st.pointsGained} points `, { continued: true })
-        doc.font("Helvetica").fillColor(NAVY).text(`(score about ${st.scoreAfter})`)
+        // Leading (not trailing) separators — pdfkit strips trailing whitespace per fragment.
+        doc.font("Helvetica").fontSize(13).fillColor(NAVY).text(`${st.order}. Pay`, { continued: true })
+        doc.font("Helvetica-Bold").text(` ${st.creditor}`, { continued: true })
+        doc.font("Helvetica").text(` ${st.action}`, { continued: true })
+        doc.font("Helvetica").text(`  —`, { continued: true })
+        doc.fillColor(GREEN).font("Helvetica-Bold").text(` +${st.pointsGained} points`, { continued: true })
+        doc.font("Helvetica").fillColor(NAVY).text(`  (score about ${st.scoreAfter})`)
         doc.moveDown(0.2)
       })
       if (bestPath.totalPayDown > 0) {
         doc.moveDown(0.2)
-        doc.font("Helvetica-Bold").fontSize(12).fillColor(NAVY).text(`Total cash to get there: $${Math.round(bestPath.totalPayDown).toLocaleString()}`)
+        doc.font("Helvetica-Bold").fontSize(13).fillColor(NAVY).text(`Total cash to get there: $${Math.round(bestPath.totalPayDown).toLocaleString()}`)
       }
-      doc.font("Helvetica-Bold").fontSize(12).fillColor(NAVY).text(`Your projected score: about ${bestPath.projectedScore}`)
+      doc.font("Helvetica-Bold").fontSize(13).fillColor(NAVY).text(`Your projected score: about ${bestPath.projectedScore}`)
     } else {
       body("Paying down balances alone won't move your score much right now — the bigger levers (like addressing negative items and letting late marks age off) are best mapped on a quick call.")
     }
     if (bestPath.note) {
       doc.moveDown(0.3)
-      doc.font("Helvetica").fontSize(11).fillColor(MUTED).text(bestPath.note)
+      doc.font("Helvetica").fontSize(12).fillColor(MUTED).text(bestPath.note)
     }
 
-    // ── Disclaimer ────────────────────────────────────────────────────────────
+    // ── Call to action ─────────────────────────────────────────────────────────
     doc.moveDown(1)
-    doc.font("Helvetica").fontSize(10).fillColor(MUTED).text(
-      "Estimated only — not a guarantee. This is educational and not financial or credit-repair advice. We are not a credit-repair organization.",
-    )
+    doc.font("Helvetica-Bold").fontSize(14).fillColor(BLUE).text("Want help putting this plan into action?")
+    doc.font("Helvetica-Bold").fontSize(16).fillColor(NAVY).text(`Call us free: ${PHONE}`)
+    doc.font("Helvetica").fontSize(13).fillColor(NAVY).text("Have questions about these results? Give us a call and our team will walk you through your next steps.")
+
+    // ── Disclaimer ────────────────────────────────────────────────────────────
+    doc.moveDown(0.8)
+    doc.font("Helvetica").fontSize(12).fillColor(MUTED).text("Estimated only — these projections are not a guarantee of future results.")
 
     doc.end()
   })

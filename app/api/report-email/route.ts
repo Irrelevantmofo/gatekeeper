@@ -58,10 +58,10 @@ function describeScenario(accounts: { accountId: string; creditor: string }[], s
   }
   const fc = s.factorChanges ?? {}
   if (fc.utilizationPct) labels.push(`Overall card usage to ${Math.round(fc.utilizationPct.to * 100)}%`)
-  if (fc.paymentOnTimePct) labels.push(`On-time payments ${Math.round(fc.paymentOnTimePct.from * 100)}% → ${Math.round(fc.paymentOnTimePct.to * 100)}%`)
-  if (fc.lengthYears) labels.push(`Credit age ${fc.lengthYears.from} → ${fc.lengthYears.to} yrs`)
-  if (fc.creditMixTypes) labels.push(`Types of credit ${fc.creditMixTypes.from} → ${fc.creditMixTypes.to}`)
-  if (fc.recentInquiries) labels.push(`Recent applications ${fc.recentInquiries.from} → ${fc.recentInquiries.to}`)
+  if (fc.paymentOnTimePct) labels.push(`On-time payments ${Math.round(fc.paymentOnTimePct.from * 100)}% to ${Math.round(fc.paymentOnTimePct.to * 100)}%`)
+  if (fc.lengthYears) labels.push(`Credit age ${fc.lengthYears.from} to ${fc.lengthYears.to} yrs`)
+  if (fc.creditMixTypes) labels.push(`Types of credit ${fc.creditMixTypes.from} to ${fc.creditMixTypes.to}`)
+  if (fc.recentInquiries) labels.push(`Recent applications ${fc.recentInquiries.from} to ${fc.recentInquiries.to}`)
   return labels
 }
 
@@ -98,9 +98,9 @@ function buildEmailHtml(firstName: string | null): string {
         <p style="margin:0 0 18px">— Credit CRB</p>
         <p style="margin:0 0 8px;font-size:16px;color:#5a6b82">P.S. If this landed in your Spam or Promotions folder, please drag it to your inbox and mark it "Not spam" so we can reach you.</p>
       </td></tr>
-      <tr><td style="background:${BRAND_BLUE};padding:24px 30px;color:#ffffff;font-size:15px;line-height:1.6">
+      <tr><td style="background:${BRAND_BLUE};padding:24px 30px;color:#ffffff;font-size:16px;line-height:1.6">
         <p style="margin:0 0 4px;font-weight:bold">Our e-mail address is:</p>
-        <p style="margin:0 0 16px">${SUPPORT_EMAIL}</p>
+        <p style="margin:0 0 16px"><a href="mailto:${SUPPORT_EMAIL}" style="color:#ffffff;text-decoration:none">${SUPPORT_EMAIL}</a></p>
         <p style="margin:0">Want to change how you receive these emails?<br/>You can <a href="mailto:${SUPPORT_EMAIL}?subject=Unsubscribe" style="color:#ffffff;text-decoration:underline">unsubscribe from this list</a>.</p>
       </td></tr>
     </table>
