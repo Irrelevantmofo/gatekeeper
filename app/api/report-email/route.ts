@@ -88,8 +88,17 @@ function buildEmailHtml(firstName: string | null): string {
       </td></tr>
       <tr><td style="padding:28px 30px 10px;color:#0c2340;font-size:18px;line-height:1.7">
         <p style="margin:0 0 18px">${hi}</p>
-        <p style="margin:0 0 18px">Thanks for using our free Credit Score Simulator. Your full results — your 3-bureau scores and the fastest way to raise them — are in the <strong>attached password-protected PDF</strong>.</p>
-        <p style="margin:0 0 18px">🔒 We've <strong>texted the password to your phone</strong>. Your email may note it couldn't scan the encrypted file — that's normal for a secure document. Just open the PDF with that code.</p>
+        <p style="margin:0 0 18px">Thanks for using our free Credit Score Simulator. Your full results are ready — your 3-bureau scores and the exact steps to raise them.</p>
+        <p style="margin:0 0 12px">To keep your information private, your results are in the <strong>attached file (a PDF)</strong> that opens with a password.</p>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef2f7;border:1px solid #d7dee8;border-radius:10px;margin:0 0 18px">
+          <tr><td style="padding:18px 22px;color:#0c2340;font-size:18px;line-height:1.7">
+            <p style="margin:0 0 12px;font-weight:bold;font-size:19px">How to open your results — 3 easy steps:</p>
+            <p style="margin:0 0 10px"><strong>1.</strong> Tap the attached file below (it's called "Credit Score Analysis").</p>
+            <p style="margin:0 0 10px"><strong>2.</strong> A box will pop up asking for a password. <strong>Type the code we just texted to your phone.</strong></p>
+            <p style="margin:0"><strong>3.</strong> Your results will open. That's it!</p>
+          </td></tr>
+        </table>
+        <p style="margin:0 0 18px;font-size:16px;color:#5a6b82">Good to know: your email may say it couldn't scan the file — that's normal for a locked, secure document, and it's safe to open.</p>
         <div style="border-top:1px solid #d7dee8;margin:22px 0"></div>
         <p style="margin:0 0 14px;font-size:20px;font-weight:bold">Two quick questions — just hit reply:</p>
         <p style="margin:0 0 12px">1. On a scale of <strong>1 to 5</strong>, how helpful was this?</p>
