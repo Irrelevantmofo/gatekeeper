@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders, getGHLConfig, normalizeEmail, normalizePhone, searchContact } from "@/lib/ghl"
 import { getSupabaseAdmin } from "@/lib/supabase"
-import { getCreditUsedTag, isGateEnforced, parseClientIp } from "@/lib/credit"
+import { hasAnyCreditUsedTag, isGateEnforced, parseClientIp } from "@/lib/credit"
 import { isOtpRequired, normalizeUsPhone, verifyVerificationToken } from "@/lib/otp"
 
 // POST /api/consent — records a consent event and runs the one-use gate.
@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
         gate = "no_contact"
       } else {
         const tags = (contact.tags ?? []).map((t) => t.toLowerCase())
-        gateWouldClose = tags.includes(getCreditUsedTag())
+        gateWouldClose = hasAnyCreditUsedTag(tags)
         gate = gateWouldClose ? "gate_closed" : "gate_open"
       }
     } catch (err) {

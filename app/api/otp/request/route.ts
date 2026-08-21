@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders, getGHLConfig, normalizePhone, upsertContact } from "@/lib/ghl"
 import { getSupabaseAdmin } from "@/lib/supabase"
-import { applyCreditLeadTag, CREDIT_CONTACT_SOURCE, parseClientIp } from "@/lib/credit"
+import { applyCreditLeadTag, buildOtpSmsMessage, CREDIT_CONTACT_SOURCE, parseClientIp } from "@/lib/credit"
 import { createAndStoreCode, dayStamp, getResendCooldownSec, isOtpBypass, normalizeUsPhone, otpRateLimitOk, sendGhlSms } from "@/lib/otp"
 
 // POST /api/otp/request — generate a code, store it (hashed), and SMS it via GHL
@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Server is missing Supabase configuration." }, { status: 500, headers: cors })
   }
 
-  let body: { phone?: string; firstName?: string; lastName?: string }
+  let body: { phone?: string; firstName?: string; lastName?: string; variant?: string }
   try {
     body = await request.json()
   } catch {
@@ -86,7 +86,9 @@ export async function POST(request: NextRequest) {
   }
 
   const code = await createAndStoreCode(supabase, phone, phone, parseClientIp(request))
-  const message = `Your CreditCRB verification code is ${code}. Reply STOP to opt out.`
+  // Branded or neutral, per the surface the request came from. Unknown/missing
+  // resolves to neutral (see resolveCreditVariant).
+  const message = buildOtpSmsMessage(code, body.variant)
   const sent = await sendGhlSms(contactId, message, ghl.token)
   if (!sent.ok) {
     console.log("[otp] GHL SMS send failed:", sent.error)

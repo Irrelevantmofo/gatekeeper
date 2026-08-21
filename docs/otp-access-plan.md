@@ -54,12 +54,16 @@ GHL has no native "OTP verify" API, so **we build the OTP logic** (generate, sto
 ## 3. Endpoints
 
 ### `POST /api/otp/request`
-Body: `{ "phone": "+1..." , "firstName?": "", "lastName?": "" }`
+Body: `{ "phone": "+1..." , "firstName?": "", "lastName?": "", "variant?": "neutral" | "creditcrb" }`
 1. Normalize phone to E.164 (reuse/extend `normalizePhone`).
 2. **Rate-limit** (§6): per-phone/day, per-IP/day, global/day (cost + A2P reputation). Enforce a resend **cooldown** (e.g. 45s).
 3. **Upsert the GHL contact** (existing `upsertContact`) — captures the lead now; tag `simulator-lead` (+ `phone-unverified`).
 4. Generate a **6-digit** code; store **hash** (not plaintext) in `phone_verifications` with `expires_at` (~5 min), `attempts=0`.
-5. **Send SMS** via GHL Conversations API to the contact: *"Your CreditCrb verification code is 123456. It expires in 5 minutes. Reply STOP to opt out."*
+5. **Send SMS** via GHL Conversations API to the contact. The body is chosen by
+   `variant` (`buildOtpSmsMessage` in `lib/credit.ts`), so the neutral surface never
+   texts a company name the visitor has not seen. Missing or unknown → neutral.
+   - neutral: *"Your Credit Score Simulator verification code is 123456. Reply STOP to opt out."*
+   - creditcrb: *"Your CreditCRB verification code is 123456. Reply STOP to opt out."*
 6. Return `{ ok: true, resendAfter: 45 }`. Never reveal whether the number "exists."
 
 ### `POST /api/otp/verify`

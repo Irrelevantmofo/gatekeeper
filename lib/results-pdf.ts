@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit"
 import type { RawExtraction } from "@/lib/credit-extraction"
 import type { BestPathResult, SimResult } from "@/lib/credit-simulator"
+import { getCreditBranding } from "@/lib/credit"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Renders the credit results as a PASSWORD-PROTECTED PDF (pdfkit, AES via PDF
@@ -18,7 +19,6 @@ const MUTED = "#33475b"
 const RULE = "#c9d2dd"
 const GREEN = "#0a7d33"
 const BLUE = "#1b4fa1"
-const PHONE = process.env.CREDIT_SUPPORT_PHONE || "855-291-7557"
 
 const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n)
 function median(nums: number[]): number | null {
@@ -29,21 +29,23 @@ function median(nums: number[]): number | null {
 }
 
 // ── Brand logo (fetched at runtime; pdfkit needs the bytes, not a URL) ─────────
-const PDF_LOGO_URL =
-  process.env.CREDIT_PDF_LOGO_URL ||
-  "https://assets.cdn.filesafe.space/A6Ohu9Xj1Qyu1CvraT26/media/6995d199b3d5f8d7d94c11ce.png"
-
-// Cached across warm invocations: undefined = not tried, null = failed.
-let logoCache: Buffer | null | undefined
-async function getLogoBuffer(): Promise<Buffer | null> {
-  if (logoCache !== undefined) return logoCache
+// Keyed by URL, because the two surfaces use different logos (and the neutral
+// one uses none). A single shared cache would let whichever variant rendered
+// first on a warm container leak its logo into the other.
+const logoCache = new Map<string, Buffer | null>()
+async function getLogoBuffer(url: string | null): Promise<Buffer | null> {
+  if (!url) return null
+  const hit = logoCache.get(url)
+  if (hit !== undefined) return hit
+  let buf: Buffer | null = null
   try {
-    const res = await fetch(PDF_LOGO_URL)
-    logoCache = res.ok ? Buffer.from(await res.arrayBuffer()) : null
+    const res = await fetch(url)
+    buf = res.ok ? Buffer.from(await res.arrayBuffer()) : null
   } catch {
-    logoCache = null
+    buf = null
   }
-  return logoCache
+  logoCache.set(url, buf)
+  return buf
 }
 
 // Read intrinsic PNG dimensions from the IHDR chunk (to scale + advance cursor).
@@ -64,12 +66,16 @@ export interface ResultsPdfInput {
   simActions: string[]
   simCashTotal: number // dollars the simulated paydowns require (0 if none)
   bestPath: BestPathResult
+  /** Which surface asked for this. Missing/unknown renders unbranded. */
+  variant?: string | null
 }
 
 // Generate the encrypted PDF as a Buffer. `password` is the user (open) password.
 export async function buildResultsPdf(input: ResultsPdfInput, password: string): Promise<Buffer> {
   const { raw, sim, simActions, simCashTotal, bestPath } = input
-  const logo = await getLogoBuffer() // best-effort; PDF still renders without it
+  const branding = getCreditBranding(input.variant)
+  // best-effort; the PDF still renders without it, and neutral has none by design
+  const logo = await getLogoBuffer(branding.pdfLogoUrl)
 
   return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({
@@ -81,7 +87,7 @@ export async function buildResultsPdf(input: ResultsPdfInput, password: string):
       ownerPassword: `${password}::owner`,
       pdfVersion: "1.7",
       permissions: { printing: "highResolution", copying: true, modifying: false },
-      info: { Title: "Credit Score Analysis", Author: "Credit CRB" },
+      info: { Title: "Credit Score Analysis", Author: branding.displayName },
     })
 
     const chunks: Buffer[] = []
@@ -206,8 +212,14 @@ export async function buildResultsPdf(input: ResultsPdfInput, password: string):
     // ── Call to action ─────────────────────────────────────────────────────────
     doc.moveDown(1)
     doc.font("Helvetica-Bold").fontSize(14).fillColor(BLUE).text("Want help putting this plan into action?")
-    doc.font("Helvetica-Bold").fontSize(16).fillColor(NAVY).text(`Call us free: ${PHONE}`)
-    doc.font("Helvetica").fontSize(13).fillColor(NAVY).text("Have questions about these results? Give us a call and our team will walk you through your next steps.")
+    if (branding.phone) {
+      doc.font("Helvetica-Bold").fontSize(16).fillColor(NAVY).text(`Call us free: ${branding.phone}`)
+      doc.font("Helvetica").fontSize(13).fillColor(NAVY).text("Have questions about these results? Give us a call and our team will walk you through your next steps.")
+    } else {
+      // Replying is genuinely actionable: the results email threads into GHL
+      // Conversations, so a reply reaches a person.
+      doc.font("Helvetica").fontSize(13).fillColor(NAVY).text("Have questions about these results? Reply to the email this report came with and a specialist will walk you through your next steps.")
+    }
 
     // ── Disclaimer ────────────────────────────────────────────────────────────
     doc.moveDown(0.8)

@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  let body: { reportId?: string }
+  let body: { reportId?: string; variant?: string }
   try {
     body = await request.json()
   } catch {
@@ -118,7 +118,8 @@ export async function POST(request: NextRequest) {
       })
       .eq("id", reportId)
 
-    // The credit used-tag (`credit-analyzer-used`) is applied in the CRM-sync
+    // The credit used-tag (`credit-analyzer-used`, or `credit-analyzer-creditcrb-used`
+    // on the branded surface) is applied in the CRM-sync
     // block below — the ONLY place any credit tag is written — after a successful
     // contact upsert. It is NOT gated by CREDIT_GATE_ENFORCED (that flag only
     // controls the re-entry BLOCK at /api/consent + /api/otp/verify). We never
@@ -167,7 +168,9 @@ export async function POST(request: NextRequest) {
             ghl.token,
             ghl.locationId,
           )
-          await applyCreditUsedTag(contact.id, ghl.token) // re-entry block tag (plan §3.5)
+          // Per-surface: neutral vs branded. This tag is what lets GoHighLevel
+          // send a neutral results email to a neutral lead instead of a branded one.
+          await applyCreditUsedTag(contact.id, ghl.token, body.variant) // re-entry block tag (plan §3.5)
           console.log(`[credit] CRM sync ok: contact=${contact.id} fields=${resolved.length} unresolved=${unresolved.join(",") || "none"}`)
         } catch (err) {
           console.log("[credit] CRM sync failed (non-fatal):", err instanceof Error ? err.message : err)

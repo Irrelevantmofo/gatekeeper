@@ -1,13 +1,14 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { corsHeaders, getGHLConfig, searchContact } from "@/lib/ghl"
 import { getSupabaseAdmin } from "@/lib/supabase"
-import { getCreditUsedTag, isGateEnforced } from "@/lib/credit"
+import { hasAnyCreditUsedTag, isGateEnforced } from "@/lib/credit"
 import { checkStoredCode, getBypassCode, isOtpBypass, normalizeUsPhone, signVerificationToken } from "@/lib/otp"
 
 // POST /api/otp/verify — check the code (against our stored hash, or the fixed
 // bypass code) and, on success, issue a verificationToken. Also enforces the
 // re-entry block: a verified phone whose GHL contact already carries the
-// credit-analyzer-used tag is refused (gate_closed) when the gate is enforced.
+// used-tag from EITHER surface (neutral or branded) is refused
+// (gate_closed) when the gate is enforced. One analysis per person, not per surface.
 
 export const runtime = "nodejs"
 
@@ -53,7 +54,7 @@ export async function POST(request: NextRequest) {
     try {
       const contact = await searchContact("", phone, ghl.token, ghl.locationId)
       const tags = (contact?.tags ?? []).map((t) => t.toLowerCase())
-      if (tags.includes(getCreditUsedTag())) {
+      if (hasAnyCreditUsedTag(tags)) {
         return NextResponse.json({ status: "gate_closed", message: "This phone number has already used the analyzer." }, { status: 200, headers: cors })
       }
     } catch (err) {

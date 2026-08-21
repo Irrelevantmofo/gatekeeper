@@ -6,14 +6,182 @@
 // "business-analyzer-used" from lib/ghl.ts; the credit tool uses its own tag.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// The GHL tag that marks a contact as having used the credit analyzer (plan
-// §4.1). Lower-cased for case-insensitive comparison against contact.tags.
-export function getCreditUsedTag(): string {
-  return (process.env.CREDIT_USED_TAG || "credit-analyzer-used").toLowerCase()
-}
-
 // GHL contact "source" for credit-analyzer leads (distinct from BAT's default).
 export const CREDIT_CONTACT_SOURCE = "IdentityIQ Credit Report Analyzer and Simulator"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Surface variants.
+//
+// The simulator ships as two surfaces: a neutral tool at /credit-simulator that
+// brokers share with their own clients, and a Credit CRB branded copy at
+// /credit-simulator-creditcrb embedded in WordPress. The frontend sends which
+// one it is, and EVERYTHING the backend generates for a user branches on it:
+// the used-tag, the OTP text, the results email, the password text, the PDF.
+//
+// Mirrors ANALYZER_VARIANT_TAGS / resolveVariantTag / hasAnyAnalyzerTag in
+// lib/ghl.ts, kept separate so BAT is never touched by credit-analyzer changes.
+// ─────────────────────────────────────────────────────────────────────────────
+export type CreditVariant = "neutral" | "creditcrb"
+
+export interface CreditVariantBranding {
+  /**
+   * Name used in SMS bodies and as the PDF's Author metadata.
+   *
+   * Never null. US A2P 10DLC campaigns are registered with sample bodies and
+   * carriers filter on content, so a text with no identification at all risks
+   * being dropped as a campaign mismatch. The neutral surface therefore names
+   * the TOOL rather than the operator, which identifies the program without
+   * telling a broker's client whose funnel they are in.
+   */
+  senderName: string
+  /**
+   * The brand as it reads in prose: the PDF's Author, the results-email
+   * sign-off, and the password text.
+   *
+   * Separate from senderName because the branded surface spells them
+   * differently — "CreditCRB" in the A2P-registered OTP body, "Credit CRB"
+   * everywhere else. Collapsing them would silently reword live copy.
+   */
+  displayName: string
+  /** Logo for the results-email header. null → no logo band at all. */
+  emailLogoUrl: string | null
+  /** Logo for the results-PDF banner. null → the PDF renders title-only. */
+  pdfLogoUrl: string | null
+  /** Header/footer colour of the results email. */
+  emailAccent: string
+  /** Sign-off line above the P.S. null → omit the line entirely. */
+  emailSignoff: string | null
+  /**
+   * Phone for the results-PDF call to action. null → non-phone copy is
+   * substituted, so a surface we have no number for never prints a dead CTA.
+   */
+  phone: string | null
+  /**
+   * Footer address, and the target of the unsubscribe mailto.
+   *
+   * Never null on EITHER variant: CAN-SPAM requires a working opt-out, so this
+   * is a functional requirement rather than branding. Until a neutral sending
+   * domain is verified in GHL there is only one real mailbox, so the neutral
+   * footer necessarily shows the operator's address — see the root README's
+   * shared open item 1. CREDIT_SUPPORT_EMAIL_NEUTRAL is the one-line switch
+   * once that domain exists.
+   */
+  supportEmail: string
+}
+
+interface CreditVariantConfig {
+  /**
+   * The GHL tag written after a successful analysis. This is what lets
+   * GoHighLevel tell the two surfaces apart and branch its workflows.
+   */
+  usedTag: string
+  branding: CreditVariantBranding
+}
+
+const DEFAULT_SUPPORT_EMAIL = "office@creditcrbusa.com"
+const DEFAULT_EMAIL_LOGO = "https://assets.cdn.filesafe.space/A6Ohu9Xj1Qyu1CvraT26/media/6a342c180a683b64fee5a440.png"
+const DEFAULT_PDF_LOGO = "https://assets.cdn.filesafe.space/A6Ohu9Xj1Qyu1CvraT26/media/6995d199b3d5f8d7d94c11ce.png"
+
+/**
+ * Read at call time, not module load, so a Vercel env change takes effect on the
+ * next invocation rather than needing a cold start to be observable.
+ */
+export function getCreditVariantConfig(variant: CreditVariant): CreditVariantConfig {
+  if (variant === "creditcrb") {
+    return {
+      usedTag: (process.env.CREDIT_USED_TAG_CREDITCRB || "credit-analyzer-creditcrb-used").toLowerCase(),
+      branding: {
+        // Byte-identical to the wording used before variants existed, so the
+        // branded surface stays consistent with the registered A2P sample.
+        senderName: "CreditCRB",
+        displayName: "Credit CRB",
+        emailLogoUrl: process.env.CREDIT_EMAIL_LOGO_URL || DEFAULT_EMAIL_LOGO,
+        pdfLogoUrl: process.env.CREDIT_PDF_LOGO_URL || DEFAULT_PDF_LOGO,
+        emailAccent: "#1b4fa1",
+        emailSignoff: "— Credit CRB",
+        phone: process.env.CREDIT_SUPPORT_PHONE || "855-291-7557",
+        supportEmail: process.env.CREDIT_SUPPORT_EMAIL || DEFAULT_SUPPORT_EMAIL,
+      },
+    }
+  }
+  return {
+    usedTag: (process.env.CREDIT_USED_TAG || "credit-analyzer-used").toLowerCase(),
+    branding: {
+      senderName: "Credit Score Simulator",
+      displayName: "Credit Score Simulator",
+      // No logo and no phone: both would name the operator to a broker's client.
+      emailLogoUrl: null,
+      pdfLogoUrl: null,
+      // The simulator's own green (#2E7D32), not Credit CRB's blue.
+      emailAccent: "#2E7D32",
+      emailSignoff: null,
+      phone: null,
+      supportEmail: process.env.CREDIT_SUPPORT_EMAIL_NEUTRAL || process.env.CREDIT_SUPPORT_EMAIL || DEFAULT_SUPPORT_EMAIL,
+    },
+  }
+}
+
+/**
+ * Resolve the variant slug sent by the frontend.
+ *
+ * Unknown or missing falls back to NEUTRAL, and that direction matters: a stale
+ * cached bundle that sends nothing gets the unbranded treatment. The failure
+ * mode is a branded visitor seeing a neutral name, never a neutral visitor
+ * receiving Credit CRB's name before they have seen a branded page.
+ */
+export function resolveCreditVariant(variant?: string | null): CreditVariant {
+  return (variant ?? "").trim().toLowerCase() === "creditcrb" ? "creditcrb" : "neutral"
+}
+
+export const getCreditBranding = (variant?: string | null): CreditVariantBranding =>
+  getCreditVariantConfig(resolveCreditVariant(variant)).branding
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The used-tag, and the re-entry gate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The tag a completed analysis should apply, for the surface it came from.
+ *
+ * The neutral tag is deliberately the SAME `credit-analyzer-used` that was
+ * written before the tool split into two surfaces. Contacts already carrying it
+ * keep gating correctly and existing GoHighLevel workflows keep firing; only the
+ * branded surface gets a new tag.
+ */
+export function getCreditUsedTag(variant?: string | null): string {
+  return getCreditVariantConfig(resolveCreditVariant(variant)).usedTag
+}
+
+/** Every tag that counts as "already used", across both surfaces. */
+export function allCreditUsedTags(): string[] {
+  return [getCreditUsedTag("neutral"), getCreditUsedTag("creditcrb")]
+}
+
+/**
+ * Has this contact used ANY surface of the simulator?
+ *
+ * The gate is one analysis per person, not one per surface. Without this
+ * someone could run the neutral tool and then the branded one for a second bite,
+ * which is the same hole hasAnyAnalyzerTag() closes for BAT.
+ *
+ * Exact element matching, never substring. The lead tag `credit-simulator` is
+ * applied to everyone who merely requests an OTP, and these names are close
+ * enough that a loose test would eventually close the gate on all of them.
+ */
+export function hasAnyCreditUsedTag(tags: string[]): boolean {
+  const owned = allCreditUsedTags()
+  return tags.some((t) => owned.includes(t.trim().toLowerCase()))
+}
+
+/** The OTP SMS body for a surface. "Reply STOP" is required on every variant. */
+export function buildOtpSmsMessage(code: string, variant?: string | null): string {
+  return `Your ${getCreditBranding(variant).senderName} verification code is ${code}. Reply STOP to opt out.`
+}
+
+/** The out-of-band text carrying the results-PDF password. */
+export function buildResultsPasswordSms(password: string, variant?: string | null): string {
+  return `Your ${getCreditBranding(variant).displayName} results password is: ${password}`
+}
 
 // Gate enforcement is OFF by default. While building/testing we want to run the
 // same contact through the flow repeatedly WITHOUT getting locked out, so the
@@ -130,6 +298,9 @@ async function addContactTag(contactId: string, tag: string, token: string): Pro
 
 // The re-entry / "used" tag (plan §4.1 step 7), the lead/segmentation tag, and
 // the results-email opt-in trigger tag.
-export const applyCreditUsedTag = (contactId: string, token: string) => addContactTag(contactId, getCreditUsedTag(), token)
+// The used-tag is per-surface: pass the variant the analysis came from, or the
+// contact is tagged neutral and GoHighLevel cannot branch its workflows.
+export const applyCreditUsedTag = (contactId: string, token: string, variant?: string | null) =>
+  addContactTag(contactId, getCreditUsedTag(variant), token)
 export const applyCreditLeadTag = (contactId: string, token: string) => addContactTag(contactId, getCreditLeadTag(), token)
 export const applyCreditResultsOptinTag = (contactId: string, token: string) => addContactTag(contactId, getCreditResultsOptinTag(), token)

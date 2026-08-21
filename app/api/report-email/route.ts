@@ -2,7 +2,14 @@ import { type NextRequest, NextResponse } from "next/server"
 import crypto from "node:crypto"
 import { corsHeaders, getGHLConfig, normalizeEmail, sendGhlEmail, upsertContact } from "@/lib/ghl"
 import { CREDIT_REPORTS_BUCKET, getSupabaseAdmin } from "@/lib/supabase"
-import { applyCreditResultsOptinTag, CREDIT_CONTACT_SOURCE, useMockExtraction } from "@/lib/credit"
+import {
+  applyCreditResultsOptinTag,
+  buildResultsPasswordSms,
+  CREDIT_CONTACT_SOURCE,
+  getCreditBranding,
+  useMockExtraction,
+  type CreditVariantBranding,
+} from "@/lib/credit"
 import { normalizeUsPhone, sendGhlSms } from "@/lib/otp"
 import { toAnalysis, type RawExtraction } from "@/lib/credit-extraction"
 import { buildBestPath, scenarioCashTotal, simulate, type SimScenario } from "@/lib/credit-simulator"
@@ -65,26 +72,32 @@ function describeScenario(accounts: { accountId: string; creditor: string }[], s
   return labels
 }
 
-// Brand colors + logo. Logo is referenced by absolute HTTPS URL (email clients
-// can't use repo/relative images); override via CREDIT_EMAIL_LOGO_URL.
-const BRAND_BLUE = "#1b4fa1"
-const LOGO_URL =
-  process.env.CREDIT_EMAIL_LOGO_URL ||
-  "https://assets.cdn.filesafe.space/A6Ohu9Xj1Qyu1CvraT26/media/6a342c180a683b64fee5a440.png"
-// Plain address shown in the footer + used for the unsubscribe mailto (kept
-// separate from CREDIT_EMAIL_FROM, which may be a "Name <addr>" send header).
-const SUPPORT_EMAIL = process.env.CREDIT_SUPPORT_EMAIL || "office@creditcrbusa.com"
+// Escape anything interpolated into the header band. firstName is already
+// escaped below; this guards the branding values, which come from env.
+const esc = (v: string) =>
+  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 
-// Branded, reply-first email (blue header/footer, 60+ readable body). The results
-// are in the attached password-protected PDF, not inline. Table-based layout +
-// inline styles for cross-client (Outlook) safety.
-function buildEmailHtml(firstName: string | null): string {
+// Reply-first email, 60+ readable body, sized for cross-client (Outlook) safety
+// with a table layout and inline styles. The results are in the attached
+// password-protected PDF, not inline.
+//
+// Everything that names the operator comes from `branding`, so the neutral
+// surface sends the same email with no logo, no sign-off and no phone. See
+// getCreditVariantConfig in lib/credit.ts.
+function buildEmailHtml(firstName: string | null, branding: CreditVariantBranding): string {
   const hi = firstName?.trim() ? `Hi ${firstName.trim()},` : "Hi there,"
+  const accent = branding.emailAccent
+  const supportEmail = esc(branding.supportEmail)
+  // Neutral has no logo, so the band carries the tool's own name as text rather
+  // than collapsing to an empty colour bar.
+  const header = branding.emailLogoUrl
+    ? `<img src="${esc(branding.emailLogoUrl)}" alt="${esc(branding.senderName)}" width="340" style="display:inline-block;width:340px;max-width:85%;height:auto;border:0" />`
+    : `<span style="display:inline-block;color:#ffffff;font-size:24px;font-weight:bold;letter-spacing:0.3px">${esc(branding.senderName)}</span>`
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0;padding:0;background:#eef2f7">
   <tr><td align="center" style="padding:0">
     <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;background:#ffffff;font-family:Arial,Helvetica,sans-serif">
-      <tr><td style="background:${BRAND_BLUE};padding:18px 20px;text-align:center">
-        <img src="${LOGO_URL}" alt="Credit CRB" width="340" style="display:inline-block;width:340px;max-width:85%;height:auto;border:0" />
+      <tr><td style="background:${accent};padding:18px 20px;text-align:center">
+        ${header}
       </td></tr>
       <tr><td style="padding:28px 30px 10px;color:#0c2340;font-size:18px;line-height:1.7">
         <p style="margin:0 0 18px">${hi}</p>
@@ -104,13 +117,13 @@ function buildEmailHtml(firstName: string | null): string {
         <p style="margin:0 0 12px">1. On a scale of <strong>1 to 5</strong>, how helpful was this?</p>
         <p style="margin:0 0 18px">2. What's one thing we could do to improve it?</p>
         <p style="margin:0 0 18px">Even a one-word reply helps us a lot — thank you!</p>
-        <p style="margin:0 0 18px">— Credit CRB</p>
+        ${branding.emailSignoff ? `<p style="margin:0 0 18px">${esc(branding.emailSignoff)}</p>` : ""}
         <p style="margin:0 0 8px;font-size:16px;color:#5a6b82">P.S. If this landed in your Spam or Promotions folder, please drag it to your inbox and mark it "Not spam" so we can reach you.</p>
       </td></tr>
-      <tr><td style="background:${BRAND_BLUE};padding:24px 30px;color:#ffffff;font-size:16px;line-height:1.6">
+      <tr><td style="background:${accent};padding:24px 30px;color:#ffffff;font-size:16px;line-height:1.6">
         <p style="margin:0 0 4px;font-weight:bold">Our e-mail address is:</p>
-        <p style="margin:0 0 16px"><a href="mailto:${SUPPORT_EMAIL}" style="color:#ffffff;text-decoration:none">${SUPPORT_EMAIL}</a></p>
-        <p style="margin:0">Want to change how you receive these emails?<br/>You can <a href="mailto:${SUPPORT_EMAIL}?subject=Unsubscribe" style="color:#ffffff;text-decoration:underline">unsubscribe from this list</a>.</p>
+        <p style="margin:0 0 16px"><a href="mailto:${supportEmail}" style="color:#ffffff;text-decoration:none">${supportEmail}</a></p>
+        <p style="margin:0">Want to change how you receive these emails?<br/>You can <a href="mailto:${supportEmail}?subject=Unsubscribe" style="color:#ffffff;text-decoration:underline">unsubscribe from this list</a>.</p>
       </td></tr>
     </table>
   </td></tr>
@@ -132,7 +145,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  let body: { reportId?: string; email?: string; scenario?: SimScenario; bestPathTarget?: number }
+  let body: { reportId?: string; email?: string; scenario?: SimScenario; bestPathTarget?: number; variant?: string }
   try {
     body = await request.json()
   } catch {
@@ -204,7 +217,11 @@ export async function POST(request: NextRequest) {
 
     // Encrypted PDF (random password, delivered by SMS).
     const password = generatePassword()
-    const pdf = await buildResultsPdf({ raw: extracted, sim, simActions, simCashTotal, bestPath }, password)
+    const branding = getCreditBranding(body.variant)
+    const pdf = await buildResultsPdf(
+      { raw: extracted, sim, simActions, simCashTotal, bestPath, variant: body.variant },
+      password,
+    )
 
     // Upload + short-lived signed URL for GHL to fetch as an attachment.
     // Friendly last path segment so the attachment name is good even if GHL derives
@@ -232,7 +249,7 @@ export async function POST(request: NextRequest) {
       {
         contactId: contact.id,
         subject: `Your credit results${extracted.consumer_first_name ? `, ${extracted.consumer_first_name}` : ""}`,
-        html: buildEmailHtml(extracted.consumer_first_name),
+        html: buildEmailHtml(extracted.consumer_first_name, branding),
         attachments: [signed.signedUrl],
         emailFrom: process.env.CREDIT_EMAIL_FROM || undefined,
         replyTo: process.env.CREDIT_EMAIL_REPLYTO || undefined,
@@ -243,7 +260,7 @@ export async function POST(request: NextRequest) {
 
     // Text the password out-of-band. Best-effort: a DND/opt-out failure shouldn't
     // 500 the request — the frontend is told so it can guide the user.
-    const smsRes = await sendGhlSms(contact.id, `Your Credit CRB results password is: ${password}`, ghl.token)
+    const smsRes = await sendGhlSms(contact.id, buildResultsPasswordSms(password, body.variant), ghl.token)
     if (!smsRes.ok) console.log("[credit] report-email password SMS failed:", smsRes.code, smsRes.error)
 
     await applyCreditResultsOptinTag(contact.id, ghl.token)
