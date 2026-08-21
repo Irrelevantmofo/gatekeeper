@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { corsHeaders, getGHLConfig, normalizeEmail, normalizePhone, searchContact, USED_TAG } from "@/lib/ghl"
+import { corsHeaders, getGHLConfig, hasAnyAnalyzerTag, normalizeEmail, normalizePhone, searchContact } from "@/lib/ghl"
 
 type GateStatus = "no_contact" | "gate_closed" | "gate_open"
 
@@ -54,7 +54,8 @@ export async function POST(request: NextRequest) {
       result = { status: "no_contact", message: MESSAGES.no_contact }
     } else {
       const tags = (contact.tags ?? []).map((t) => t.toLowerCase())
-      const hasUsedTag = tags.includes(USED_TAG)
+      // Any variant closes the gate, matching /api/submit.
+      const hasUsedTag = hasAnyAnalyzerTag(tags)
       result = hasUsedTag
         ? { status: "gate_closed", message: MESSAGES.gate_closed }
         : { status: "gate_open", message: MESSAGES.gate_open }

@@ -2,7 +2,48 @@ import { type NextRequest } from "next/server"
 
 export const GHL_BASE_URL = "https://services.leadconnectorhq.com"
 export const GHL_API_VERSION = "2021-07-28"
+// ---------------------------------------------------------------------------
+// BAT ships as two surfaces: a neutral tool that brokers share, and a Credit CRB
+// branded copy embedded in WordPress. They are tagged differently so GoHighLevel
+// workflows can branch, most importantly to send a neutral results email to
+// neutral leads instead of a Credit CRB one.
+//
+// USED_TAG stays the neutral tag and stays exported, so any caller that does not
+// send a variant behaves exactly as before.
+// ---------------------------------------------------------------------------
 export const USED_TAG = "business-analyzer-used"
+
+/** Variant slug, as sent by the frontend, mapped to the tag it earns. */
+export const ANALYZER_VARIANT_TAGS: Record<string, string> = {
+  neutral: USED_TAG,
+  creditcrb: "business-analyzer-creditcrb-used",
+}
+
+/**
+ * The tag a submission should apply.
+ *
+ * Unknown or missing variants fall back to the neutral tag rather than inventing
+ * one, so a broker slug we have not mapped still gates correctly. Own-property
+ * check because a plain object index walks the prototype chain.
+ */
+export function resolveVariantTag(variant?: string | null): string {
+  if (!variant) return USED_TAG
+  const key = variant.trim().toLowerCase()
+  if (!Object.prototype.hasOwnProperty.call(ANALYZER_VARIANT_TAGS, key)) return USED_TAG
+  return ANALYZER_VARIANT_TAGS[key]
+}
+
+/**
+ * Has this contact used ANY variant of the analyzer?
+ *
+ * The gate exists to allow one estimate per business, not one per surface. So it
+ * closes on any variant tag: without this, someone could run the neutral tool and
+ * the branded tool and generate two leads for the same business.
+ */
+export function hasAnyAnalyzerTag(tags: string[]): boolean {
+  const owned = Object.values(ANALYZER_VARIANT_TAGS)
+  return tags.some((t) => owned.includes(t))
+}
 
 export interface GHLContact {
   id: string
@@ -277,7 +318,15 @@ export async function resolveContactCustomFields(
 
 // Adds the "used" tag to a contact. GHL merges tags, so this is safe to call
 // even if the tag somehow already exists.
-export async function addUsedTag(contactId: string, token: string): Promise<void> {
+/**
+ * Applies the analyzer used-tag. Defaults to the neutral tag so existing callers
+ * that pass no tag are unchanged.
+ */
+export async function addUsedTag(
+  contactId: string,
+  token: string,
+  tag: string = USED_TAG,
+): Promise<void> {
   const res = await fetch(`${GHL_BASE_URL}/contacts/${contactId}/tags`, {
     method: "POST",
     headers: {
@@ -286,7 +335,7 @@ export async function addUsedTag(contactId: string, token: string): Promise<void
       "Content-Type": "application/json",
       Accept: "application/json",
     },
-    body: JSON.stringify({ tags: [USED_TAG] }),
+    body: JSON.stringify({ tags: [tag] }),
     cache: "no-store",
   })
 

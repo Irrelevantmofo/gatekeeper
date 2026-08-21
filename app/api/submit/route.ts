@@ -3,12 +3,13 @@ import {
   addUsedTag,
   corsHeaders,
   getGHLConfig,
+  hasAnyAnalyzerTag,
   normalizeEmail,
   normalizePhone,
   resolveContactCustomFields,
+  resolveVariantTag,
   searchContact,
   upsertContact,
-  USED_TAG,
 } from "@/lib/ghl"
 
 // Single consolidated endpoint for a form submission. In one server-side request it:
@@ -45,6 +46,11 @@ export async function POST(request: NextRequest) {
     companyName?: string
     email?: string
     phone?: string
+    // Which surface the lead came from: "neutral" (default) or "creditcrb".
+    // Decides which used-tag is applied, so GHL workflows can branch, chiefly to
+    // send a neutral results email to neutral leads. Absent means neutral, which
+    // is exactly the behaviour before variants existed.
+    variant?: string
     // Analyzer values keyed by GHL field key/name, e.g. { gross_monthly_revenue: 50000 }.
     customFields?: Record<string, unknown>
   }
@@ -66,7 +72,8 @@ export async function POST(request: NextRequest) {
     const existing = await searchContact(email, phone, config.token, config.locationId)
     if (existing) {
       const tags = (existing.tags ?? []).map((t) => t.toLowerCase())
-      if (tags.includes(USED_TAG)) {
+      // Any variant closes the gate: one estimate per business, not per surface.
+      if (hasAnyAnalyzerTag(tags)) {
         // Already submitted. Return without creating/updating or re-tagging.
         return NextResponse.json(
           { status: "gate_closed" as SubmitStatus, message: "Contact has already used the business analyzer." },
@@ -109,7 +116,8 @@ export async function POST(request: NextRequest) {
     )
 
     // 4. Tag it in the same request — no cross-call race, real id in hand.
-    await addUsedTag(contact.id, config.token)
+    const usedTag = resolveVariantTag(body.variant)
+    await addUsedTag(contact.id, config.token, usedTag)
 
     return NextResponse.json(
       {
@@ -118,6 +126,7 @@ export async function POST(request: NextRequest) {
         created: !existing,
         customFieldsApplied: resolvedCustomFields.resolved.length,
         customFieldsUnresolved: resolvedCustomFields.unresolved,
+        appliedTag: usedTag,
         message: "Contact saved and tagged.",
       },
       { status: 200, headers: cors },
