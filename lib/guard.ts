@@ -50,10 +50,23 @@ export interface GuardConfig {
   secret: string
 }
 
+/**
+ * An origin has a scheme and a host and nothing else.
+ *
+ * A browser's `Origin` header never carries a path, so `https://example.com/` in
+ * ALLOWED_ORIGINS would never match anything. Pasting a URL out of the address
+ * bar is the obvious way to fill that variable in and the address bar includes the
+ * slash, so the config is normalised rather than the operator being expected to
+ * know. This cost a live CORS failure on 25 August 2026.
+ */
+export function normalizeOrigin(value: string | null | undefined): string {
+  return (value ?? "").trim().replace(/\/+$/, "")
+}
+
 export function readGuardConfig(env: Record<string, string | undefined>): GuardConfig {
   const allowedOrigins = (env.ALLOWED_ORIGINS ?? "*")
     .split(",")
-    .map((o) => o.trim().replace(/\/+$/, ""))
+    .map(normalizeOrigin)
     .filter(Boolean)
 
   return {
@@ -113,7 +126,7 @@ export function evaluate(request: GuardRequest, config: GuardConfig): GuardVerdi
   const origin = request.origin ?? refererOrigin(request.referer)
   if (!origin) return { allow: false, reason: "no-origin" }
 
-  const normalised = origin.replace(/\/+$/, "")
+  const normalised = normalizeOrigin(origin)
   if (unrestrictedOrigins || config.allowedOrigins.includes(normalised)) {
     return { allow: true, reason: "origin" }
   }

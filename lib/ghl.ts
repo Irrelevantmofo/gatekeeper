@@ -1,4 +1,5 @@
 import { type NextRequest } from "next/server"
+import { normalizeOrigin, readGuardConfig } from "./guard"
 
 export const GHL_BASE_URL = "https://services.leadconnectorhq.com"
 export const GHL_API_VERSION = "2021-07-28"
@@ -89,17 +90,29 @@ interface GHLSearchResponse {
 
 // Build CORS headers, echoing back the request origin when it's in the allowlist.
 // Set ALLOWED_ORIGINS (comma-separated) to restrict; defaults to "*".
+//
+// Parsing is shared with lib/guard.ts, which guards the same requests in proxy.ts.
+// It has to be: the 2 disagreeing is a state where the guard lets a caller in and
+// this then hands the browser a header it rejects, which reads as a CORS bug with
+// no mention of either file.
+//
+// TRAILING SLASHES. `ALLOWED_ORIGINS=https://example.com/` used to fail, because a
+// browser's Origin header is `https://example.com` with no path, ever. The list is
+// normalised now so both forms work. It went unnoticed because of the fallback
+// below, which used to echo `allowed[0]` when the origin did not match, producing
+// "the header has a value <a completely different app's URL>" and sending whoever
+// read it looking at the wrong app.
 export function corsHeaders(request: NextRequest): Record<string, string> {
-  const allowed = (process.env.ALLOWED_ORIGINS ?? "*")
-    .split(",")
-    .map((o) => o.trim())
-    .filter(Boolean)
+  const { allowedOrigins: allowed } = readGuardConfig({ ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS })
 
-  const requestOrigin = request.headers.get("origin")
+  const requestOrigin = normalizeOrigin(request.headers.get("origin"))
   let allowOrigin = "*"
 
   if (!allowed.includes("*")) {
-    allowOrigin = requestOrigin && allowed.includes(requestOrigin) ? requestOrigin : allowed[0] ?? ""
+    // No header at all when the origin is not allowed. Echoing some other allowed
+    // origin is worse than silence: the browser blocks it either way, and only one
+    // of those two produces an error message that names the real problem.
+    allowOrigin = requestOrigin && allowed.includes(requestOrigin) ? requestOrigin : ""
   }
 
   const headers: Record<string, string> = {
